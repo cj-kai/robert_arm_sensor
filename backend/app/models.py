@@ -64,6 +64,31 @@ class LogEntry:
         }
 
 
+def _default_robot_pose() -> dict:
+    """默认机器人位姿"""
+    return {"x_m": 0.0, "y_m": 0.0, "z_m": 0.3, "roll_deg": 0.0, "pitch_deg": 0.0, "yaw_deg": 0.0}
+
+def _default_target_pose() -> dict:
+    """默认目标位姿"""
+    return {"x_m": 0.35, "y_m": 0.12, "z_m": 0.0}
+
+def _default_place_pose() -> dict:
+    """默认放置位姿"""
+    return {"x_m": -0.25, "y_m": 0.25, "z_m": 0.0}
+
+def _default_vision() -> dict:
+    """默认视觉状态"""
+    return {"detected": False, "confidence": 0.0}
+
+def _default_grip() -> dict:
+    """默认夹具状态"""
+    return {"vacuum_on": False, "sealed": False}
+
+def _default_fault() -> dict:
+    """默认故障状态"""
+    return {"active": False, "code": "", "msg": ""}
+
+
 @dataclass
 class SystemState:
     """系统状态"""
@@ -75,6 +100,14 @@ class SystemState:
     success_count: int = 0
     last_event: str = ""
     logs: deque = field(default_factory=lambda: deque(maxlen=200))
+
+    # 新增字段（3D可视化）
+    robot_pose: dict = field(default_factory=_default_robot_pose)
+    target_pose: dict = field(default_factory=_default_target_pose)
+    place_pose: dict = field(default_factory=_default_place_pose)
+    vision: dict = field(default_factory=_default_vision)
+    grip: dict = field(default_factory=_default_grip)
+    fault: dict = field(default_factory=_default_fault)
 
     def add_log(self, level: LogLevel, code: str, msg: str):
         """添加日志"""
@@ -107,7 +140,14 @@ class SystemState:
             "recover_count": self.recover_count,
             "success_count": self.success_count,
             "last_event": self.last_event,
-            "log": self.get_recent_logs(50)
+            "log": self.get_recent_logs(50),
+            # 新增字段
+            "robot_pose": self.robot_pose,
+            "target_pose": self.target_pose,
+            "place_pose": self.place_pose,
+            "vision": self.vision,
+            "grip": self.grip,
+            "fault": self.fault,
         }
 
 

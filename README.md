@@ -1,14 +1,15 @@
 # Vacuum Grasp Dashboard
 
-真空抓取可靠性与自恢复模块 - 暗色工业控制台 Web Dashboard
+真空抓取可靠性与自恢复模块 - 暗色工业控制台 Web Dashboard（3D可视化版本）
 
 ## 功能特性
 
 - **14状态FSM**: 完整的抓取流程状态机
+- **3D可视化**: three.js 实时渲染机械臂、VGC10吸盘阵列、托盘
 - **故障注入**: 支持预吸取失败、搬运掉压两种故障场景
 - **自动重试**: 3x3网格偏移重试（中心→四邻→四角）
 - **自动恢复**: 掉压检测后自动进入恢复模式
-- **实时监控**: WebSocket 每100ms推送状态
+- **实时监控**: WebSocket 每30ms推送状态
 - **暗色工业风格**: 专业控制台UI设计
 
 ## 项目结构
@@ -20,13 +21,13 @@ robert_arm_sensor/
 │   │   ├── __init__.py
 │   │   ├── main.py          # FastAPI 入口
 │   │   ├── fsm.py           # 状态机核心
-│   │   ├── models.py        # 状态码/事件码枚举
-│   │   ├── simulator.py     # 模拟器
+│   │   ├── models.py        # 状态码/事件码枚举 + 数据模型
+│   │   ├── simulator.py     # 模拟器 (VisionSim/RobotSim/GripSim)
 │   │   └── ws_manager.py    # WebSocket管理
 │   ├── requirements.txt
 │   └── Dockerfile
 ├── frontend/
-│   └── index.html           # 单页应用
+│   └── index.html           # 单页应用 (three.js 3D工作区)
 ├── docker-compose.yml
 └── README.md
 ```
@@ -54,6 +55,28 @@ docker compose up -d --build
 ### 3. 访问 Dashboard
 
 打开浏览器访问: `http://<服务器IP>:8000`
+
+## 3D 工作区操作
+
+| 操作 | 鼠标 |
+|------|------|
+| 旋转视角 | 左键拖拽 |
+| 缩放 | 滚轮 |
+| 平移 | 右键拖拽 |
+
+## 坐标系映射说明（关键）
+
+**后端（工业约定）**:
+- `x_m`: 左右方向
+- `y_m`: 前后方向
+- `z_m`: 高度方向
+
+**前端（three.js）**:
+- `three.x = x_m`（左右）
+- `three.y = z_m`（高度）
+- `three.z = y_m`（前后）
+
+> 这种映射是因为 three.js 默认 Y 轴为高度，而工业机器人通常使用 Z 轴为高度。前端在接收 WS 数据时自动完成映射。
 
 ## Ubuntu 云端部署
 
@@ -116,7 +139,7 @@ docker compose logs -f
 ### WebSocket
 
 - 端点: `/ws`
-- 推送频率: 100ms
+- 推送频率: 30ms
 - 推送格式:
 ```json
 {
@@ -128,7 +151,13 @@ docker compose logs -f
   "recover_count": 0,
   "success_count": 5,
   "last_event": "VACUUM_ON",
-  "log": [...]
+  "log": [...],
+  "robot_pose": {"x_m": 0.25, "y_m": 0.10, "z_m": 0.15, "roll_deg": 0, "pitch_deg": 90, "yaw_deg": 0},
+  "target_pose": {"x_m": 0.35, "y_m": 0.12, "z_m": 0.0},
+  "place_pose": {"x_m": -0.25, "y_m": 0.25, "z_m": 0.05},
+  "vision": {"detected": true, "confidence": 0.92},
+  "grip": {"vacuum_on": true, "sealed": false},
+  "fault": {"active": false, "code": "", "msg": ""}
 }
 ```
 
@@ -150,6 +179,24 @@ docker compose logs -f
 | AUTO_RETRYING_GRASP | 自动重试抓取 |
 | AUTO_RECOVERY_MODE | 自动恢复模式 |
 | FAULT_LATCHED | 故障锁定 |
+
+## 3D 场景元素
+
+| 元素 | 描述 |
+|------|------|
+| CRX 机械臂 | 白色底座 + 3段连杆 + 绿色关节球 |
+| VGC10 末端 | 灰色方盒 + 10个吸盘（状态变色） |
+| 托盘 | 蓝色半透明（目标位置） |
+| 放置区 | 绿色半透明（放置位置） |
+| 标记球 | 红色（视觉检测点） |
+
+### 吸盘状态颜色
+
+| 状态 | 颜色 |
+|------|------|
+| 关闭 | 深灰 (#0f172a) |
+| 真空开启 | 黄色 (#f59e0b) |
+| 密封成功 | 绿色 (#22c55e) |
 
 ## 故障注入测试流程
 
@@ -174,6 +221,7 @@ docker compose logs -f
 - `backend/app/simulator.py` 中的 `VacuumSim` → 接入真实真空传感器
 - `backend/app/simulator.py` 中的 `RobotSim` → 接入真实机器人控制器
 - `backend/app/simulator.py` 中的 `VisionSim` → 接入 AruCo 或其他视觉系统
+- `backend/app/simulator.py` 中的 `GripSim` → 接入真实夹具控制器
 
 FSM 逻辑和 API 保持不变。
 

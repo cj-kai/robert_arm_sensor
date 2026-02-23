@@ -1,4 +1,4 @@
-"""FSM 状态机：真空抓取可靠性与自恢复模块"""
+"""FSM 状态机：真空抓取可靠性与自恢复模块（3D可视化版本）"""
 import asyncio
 import time
 from typing import Optional
@@ -6,17 +6,18 @@ from .models import (
     StateCode, EventCode, LogLevel, SystemState,
     GRID_OFFSETS, MAX_RETRY
 )
-from .simulator import VisionSim, VacuumSim, RobotSim, TargetPose
+from .simulator import VisionSim, VacuumSim, RobotSim, GripSim, TargetPose
 
 
 class GraspFSM:
-    """抓取状态机"""
+    """抓取状态机（3D可视化版本）"""
 
     def __init__(self):
         self.state = SystemState()
         self.vision = VisionSim()
         self.vacuum = VacuumSim()
         self.robot = RobotSim()
+        self.grip = GripSim()
 
         # 运行控制
         self._running: bool = False
@@ -26,21 +27,36 @@ class GraspFSM:
         self._current_target: Optional[TargetPose] = None
         self._current_offset_idx: int = 0
 
+        # 目标位姿（用于平滑移动）
+        self._goal_pose: Optional[dict] = None
+
         # 放置位置（世界坐标，单位：米）
-        self._place_position = (0.0, 0.0, 0.05)
+        self._place_position = {"x_m": -0.25, "y_m": 0.25, "z_m": 0.05}
+
+        # 安全位姿
+        self._safe_pose = {"x_m": 0.0, "y_m": 0.0, "z_m": 0.3}
+
+        # 接触高度
+        self._contact_z = 0.02  # 20mm
+
+        # 状态计时器
+        self._state_timer: float = 0.0
+
+        # 故障标志
+        self._fault_injected: bool = False
 
     async def start(self):
         """启动 FSM"""
         if self._running:
             return
         if self.state.state == StateCode.FAULT_LATCHED:
-            self.state.add_log(LogLevel.WARN, EventCode.RECOVERY_TRIGGERED.value,
+            self.state.add_log(LogLevel.WARN, "CANNOT_START",
                                "Cannot start from FAULT_LATCHED, please reset first")
             return
 
         self._running = True
-        self.state.add_log(LogLevel.INFO, EventCode.TARGET_DETECTED.value,
-                           "FSM started")
+        self.vision.start_scan()
+        self.state.add_log(LogLevel.INFO, "FSM_STARTED", "FSM started")
         self._task = asyncio.create_task(self._run_loop())
 
     async def stop(self):
@@ -57,6 +73,7 @@ class GraspFSM:
         self.state.state = StateCode.IDLE
         self.vacuum.turn_off()
         self.robot.stop()
+        self._goal_pose = None
         self.state.add_log(LogLevel.INFO, "FSM_STOPPED", "FSM stopped, returned to IDLE")
 
     async def reset(self):
@@ -71,22 +88,37 @@ class GraspFSM:
         self.state.vacuum_ok = False
         self.state.vacuum_kpa = None
         self.state.last_event = ""
+        self._fault_injected = False
 
         # 重置模拟器
         self.vacuum.reset_faults()
         self.robot = RobotSim()
+        self.grip = GripSim()
+        self.vision.reset()
+        self._goal_pose = None
+        self._state_timer = 0.0
+
+        # 重置 SystemState 的 3D 字段
+        self.state.robot_pose = {"x_m": 0.0, "y_m": 0.0, "z_m": 0.3, "roll_deg": 0.0, "pitch_deg": 0.0, "yaw_deg": 0.0}
+        self.state.target_pose = {"x_m": 0.35, "y_m": 0.12, "z_m": 0.0}
+        self.state.place_pose = self._place_position.copy()
+        self.state.vision = {"detected": False, "confidence": 0.0}
+        self.state.grip = {"vacuum_on": False, "sealed": False}
+        self.state.fault = {"active": False, "code": "", "msg": ""}
 
         self.state.add_log(LogLevel.INFO, "FSM_RESET", "FSM reset to initial state")
 
     def inject_pre_suction_fail(self):
         """注入故障：下一次 PRE_SUCTION_CHECK 失败"""
         self.vacuum.inject_pre_suction_fail()
+        self._fault_injected = True
         self.state.add_log(LogLevel.WARN, "FAULT_INJECT",
                            "Injected: next pre-suction check will fail")
 
     def inject_drop_once(self):
         """注入故障：TRANSPORT_MONITORING 中掉压"""
         self.vacuum.inject_drop_once()
+        self._fault_injected = True
         self.state.add_log(LogLevel.WARN, "FAULT_INJECT",
                            "Injected: will drop during transport")
 
@@ -96,16 +128,36 @@ class GraspFSM:
         self.state.add_log(LogLevel.INFO, "LOG_CLEARED", "Log buffer cleared")
 
     async def _run_loop(self):
-        """主状态机循环"""
+        """主状态机循环（30~50ms tick）"""
+        last_time = time.time()
         try:
             while self._running:
-                await self._step()
-                await asyncio.sleep(0.05)  # 50ms 循环周期
+                current_time = time.time()
+                dt = current_time - last_time
+                last_time = current_time
+
+                # 限制 dt 防止大跳跃
+                dt = min(dt, 0.1)
+
+                await self._step(dt)
+                self._update_state_for_ws()
+
+                await asyncio.sleep(0.03)  # 30ms tick
         except asyncio.CancelledError:
             pass
 
-    async def _step(self):
+    async def _step(self, dt: float):
         """状态机单步执行"""
+        # 更新视觉扫描
+        self.vision.update_scan(dt)
+
+        # 平滑移动机器人
+        self.robot.step(dt, self._goal_pose)
+
+        # 更新状态计时器
+        self._state_timer += dt
+
+        # 执行状态处理器
         handler = {
             StateCode.IDLE: self._handle_idle,
             StateCode.DETECTING_TARGET: self._handle_detecting_target,
@@ -124,7 +176,12 @@ class GraspFSM:
         }.get(self.state.state)
 
         if handler:
-            await handler()
+            await handler(dt)
+
+        # 更新 GripSim
+        ee_at_contact = self._is_ee_at_contact()
+        grip_state = self.grip.update(self.state.state.value, ee_at_contact, self._fault_injected, dt)
+        self.state.grip = grip_state
 
         # 更新真空状态
         if self.vacuum.vacuum_on:
@@ -134,184 +191,236 @@ class GraspFSM:
             self.state.vacuum_kpa = None
             self.state.vacuum_ok = False
 
+    def _is_ee_at_contact(self) -> bool:
+        """判断末端是否在接触位置"""
+        if self._goal_pose is None:
+            return False
+        contact_z = self._goal_pose.get("z_m", 0.3)
+        return abs(self.robot.z - contact_z) < 0.01 and contact_z < 0.1
+
+    def _update_state_for_ws(self):
+        """更新 SystemState 用于 WS 推送"""
+        # 更新 robot_pose
+        self.state.robot_pose = self.robot.get_pose_dict()
+
+        # 更新 vision
+        vision_data = self.vision.detect()
+        self.state.vision = {
+            "detected": vision_data["detected"],
+            "confidence": round(vision_data["confidence"], 2)
+        }
+        if vision_data["detected"]:
+            self.state.target_pose = vision_data["target_pose"]
+
+        # 更新 place_pose
+        self.state.place_pose = self._place_position.copy()
+
+        # 更新 fault
+        if self.state.state == StateCode.FAULT_LATCHED:
+            self.state.fault = {
+                "active": True,
+                "code": "RETRY_EXHAUSTED",
+                "msg": "Retry exhausted, manual reset required"
+            }
+        elif self.state.state == StateCode.AUTO_RECOVERY_MODE:
+            self.state.fault = {
+                "active": True,
+                "code": "RECOVERY",
+                "msg": "Auto recovery in progress"
+            }
+        else:
+            self.state.fault = {"active": False, "code": "", "msg": ""}
+
     # ==================== 状态处理器 ====================
 
-    async def _handle_idle(self):
+    async def _handle_idle(self, dt: float):
         """IDLE: 等待启动"""
-        # 从 IDLE 转换到 DETECTING_TARGET 由 start() 触发
+        self._goal_pose = self._safe_pose.copy()
         if self._running and self.state.state == StateCode.IDLE:
             self.state.state = StateCode.DETECTING_TARGET
+            self._state_timer = 0.0
 
-    async def _handle_detecting_target(self):
+    async def _handle_detecting_target(self, dt: float):
         """DETECTING_TARGET: 视觉检测目标"""
-        await asyncio.sleep(0.2)  # 模拟检测时间
+        self._goal_pose = self._safe_pose.copy()
 
-        self._current_target = self.vision.detect_target()
-        if self._current_target:
+        vision_data = self.vision.detect()
+        if vision_data["detected"] and vision_data["confidence"] > 0.9:
+            target = vision_data["target_pose"]
+            self._current_target = TargetPose(x=target["x_m"], y=target["y_m"], z=target["z_m"])
             self.state.add_log(LogLevel.INFO, EventCode.TARGET_DETECTED.value,
-                               f"Target detected at ({self._current_target.x:.2f}, {self._current_target.y:.2f})")
+                               f"Target detected at ({target['x_m']:.2f}, {target['y_m']:.2f})")
             self._current_offset_idx = 0
             self.state.state = StateCode.PLANNING_APPROACH
+            self._state_timer = 0.0
 
-    async def _handle_planning_approach(self):
+    async def _handle_planning_approach(self, dt: float):
         """PLANNING_APPROACH: 规划接近路径"""
-        await asyncio.sleep(0.1)  # 模拟规划时间
+        # 短暂延迟后转换
+        if self._state_timer > 0.2:
+            self.state.add_log(LogLevel.INFO, EventCode.APPROACH_PLANNED.value,
+                               "Approach path planned")
+            self.state.state = StateCode.MOVING_TO_PREGRASP
+            self._state_timer = 0.0
 
-        self.state.add_log(LogLevel.INFO, EventCode.APPROACH_PLANNED.value,
-                           "Approach path planned")
-        self.state.state = StateCode.MOVING_TO_PREGRASP
-
-    async def _handle_moving_to_pregrasp(self):
+    async def _handle_moving_to_pregrasp(self, dt: float):
         """MOVING_TO_PREGRASP: 移动到预抓取位置"""
         if self._current_target:
-            # 获取当前偏移
             dx, dy = GRID_OFFSETS[self._current_offset_idx]
+            self._goal_pose = {
+                "x_m": self._current_target.x + dx,
+                "y_m": self._current_target.y + dy,
+                "z_m": self.robot.safe_z
+            }
 
-            # 移动到目标上方（安全高度）
-            target_x = self._current_target.x + dx
-            target_y = self._current_target.y + dy
-            safe_z = self.robot.safe_z
+            if self.robot.is_at_goal(self._goal_pose):
+                self.state.add_log(LogLevel.INFO, "MOVE_COMPLETE",
+                                   f"Arrived at pregrasp position")
+                self.state.state = StateCode.DESCENDING_TO_CONTACT
+                self._state_timer = 0.0
 
-            await asyncio.to_thread(self.robot.move_to, target_x, target_y, safe_z)
-
-            self.state.add_log(LogLevel.INFO, "MOVE_COMPLETE",
-                               f"Moved to pregrasp ({target_x:.3f}, {target_y:.3f}, {safe_z:.3f})")
-            self.state.state = StateCode.DESCENDING_TO_CONTACT
-
-    async def _handle_descending_to_contact(self):
+    async def _handle_descending_to_contact(self, dt: float):
         """DESCENDING_TO_CONTACT: 下降到接触"""
-        # 下降到抓取高度（接近目标表面）
-        grasp_z = 0.02  # 20mm
-        await asyncio.to_thread(self.robot.move_relative, 0, 0, grasp_z - self.robot.z)
+        if self._current_target:
+            dx, dy = GRID_OFFSETS[self._current_offset_idx]
+            self._goal_pose = {
+                "x_m": self._current_target.x + dx,
+                "y_m": self._current_target.y + dy,
+                "z_m": self._contact_z
+            }
 
-        self.state.add_log(LogLevel.INFO, "DESCENT_COMPLETE",
-                           f"Descended to contact at z={grasp_z:.3f}")
-        self.state.state = StateCode.PRE_SUCTION_CHECK
+            if self.robot.is_at_goal(self._goal_pose):
+                self.state.add_log(LogLevel.INFO, "DESCENT_COMPLETE",
+                                   f"Descended to contact at z={self._contact_z:.3f}")
+                self.state.state = StateCode.PRE_SUCTION_CHECK
+                self._state_timer = 0.0
 
-    async def _handle_pre_suction_check(self):
+    async def _handle_pre_suction_check(self, dt: float):
         """PRE_SUCTION_CHECK: 预吸取检查"""
-        # 开启真空
-        self.vacuum.turn_on()
-        self.state.add_log(LogLevel.INFO, EventCode.VACUUM_ON.value, "Vacuum turned ON")
+        if self._state_timer < 0.1:
+            return  # 等待稳定
 
-        # 等待建立负压（200ms）
-        await asyncio.sleep(0.2)
+        if not self.vacuum.vacuum_on:
+            self.vacuum.turn_on()
+            self.state.add_log(LogLevel.INFO, EventCode.VACUUM_ON.value, "Vacuum turned ON")
+            return
 
-        # 读取压力
-        kpa = self.vacuum.read_pressure()
-        self.state.vacuum_kpa = kpa
-        self.state.vacuum_ok = self.vacuum.vacuum_ok
+        if self._state_timer > 0.3:  # 等待负压建立
+            if self.vacuum.vacuum_ok:
+                self.state.add_log(LogLevel.INFO, EventCode.PRE_SUCTION_OK.value,
+                                   f"Pre-suction OK, pressure={self.state.vacuum_kpa:.1f}kPa")
+                self.state.retry_count = 0
+                self._fault_injected = False
+                self.state.state = StateCode.LIFT_VERIFICATION
+            else:
+                self.state.add_log(LogLevel.ERROR, EventCode.PRE_SUCTION_FAIL.value,
+                                   f"Pre-suction FAILED, pressure={self.state.vacuum_kpa:.1f}kPa")
+                self.state.state = StateCode.AUTO_RETRYING_GRASP
+            self._state_timer = 0.0
 
-        if self.state.vacuum_ok:
-            self.state.add_log(LogLevel.INFO, EventCode.PRE_SUCTION_OK.value,
-                               f"Pre-suction OK, pressure={kpa:.1f}kPa")
-            self.state.retry_count = 0  # 重置重试计数
-            self.state.state = StateCode.LIFT_VERIFICATION
-        else:
-            self.state.add_log(LogLevel.ERROR, EventCode.PRE_SUCTION_FAIL.value,
-                               f"Pre-suction FAILED, pressure={kpa:.1f}kPa")
-            self.state.state = StateCode.AUTO_RETRYING_GRASP
-
-    async def _handle_lift_verification(self):
+    async def _handle_lift_verification(self, dt: float):
         """LIFT_VERIFICATION: 抬起验证"""
-        # 轻抬 30mm
-        lift_height = 0.03
-        await asyncio.to_thread(self.robot.move_relative, 0, 0, lift_height)
+        if self._current_target:
+            dx, dy = GRID_OFFSETS[self._current_offset_idx]
+            self._goal_pose = {
+                "x_m": self._current_target.x + dx,
+                "y_m": self._current_target.y + dy,
+                "z_m": self._contact_z + 0.05  # 抬起 50mm
+            }
 
-        # 等待稳定
-        await asyncio.sleep(0.1)
+            if self.robot.is_at_goal(self._goal_pose):
+                if self.grip.sealed:
+                    self.state.add_log(LogLevel.INFO, EventCode.LIFT_CHECK_OK.value,
+                                       "Lift check OK, object held firmly")
+                    self.state.state = StateCode.TRANSPORT_MONITORING
+                else:
+                    self.state.add_log(LogLevel.ERROR, EventCode.LIFT_CHECK_FAIL.value,
+                                       "Lift check FAILED, object unstable")
+                    self.vacuum.turn_off()
+                    self.state.state = StateCode.AUTO_RETRYING_GRASP
+                self._state_timer = 0.0
 
-        # 再次检查真空
-        if self.state.vacuum_ok:
-            self.state.add_log(LogLevel.INFO, EventCode.LIFT_CHECK_OK.value,
-                               f"Lift check OK, object held firmly")
-            self.state.state = StateCode.TRANSPORT_MONITORING
-        else:
-            self.state.add_log(LogLevel.ERROR, EventCode.LIFT_CHECK_FAIL.value,
-                               "Lift check FAILED, object unstable")
-            # 放回并重试
-            self.vacuum.turn_off()
-            await asyncio.sleep(0.1)
-            self.state.state = StateCode.AUTO_RETRYING_GRASP
-
-    async def _handle_transport_monitoring(self):
+    async def _handle_transport_monitoring(self, dt: float):
         """TRANSPORT_MONITORING: 搬运监控"""
-        # 计算到放置点的距离
-        px, py, pz = self._place_position
-        dx = px - self.robot.x
-        dy = py - self.robot.y
+        # 目标：放置点上方
+        self._goal_pose = {
+            "x_m": self._place_position["x_m"],
+            "y_m": self._place_position["y_m"],
+            "z_m": 0.15  # 运输高度
+        }
 
-        # 分步移动并持续监控
-        steps = 5
-        for i in range(steps):
-            if not self._running:
-                return
+        # 检查是否掉压
+        if not self.vacuum.vacuum_ok and self.grip.sealed:
+            self.state.add_log(LogLevel.ERROR, EventCode.DROP_DETECTED.value,
+                               f"Drop detected during transport!")
+            self.state.recover_count += 1
+            self.state.state = StateCode.AUTO_RECOVERY_MODE
+            self._state_timer = 0.0
+            return
 
-            # 移动一步
-            step_x = self.robot.x + dx / steps
-            step_y = self.robot.y + dy / steps
-            await asyncio.to_thread(self.robot.move_to, step_x, step_y, self.robot.z)
+        if self.robot.is_at_goal(self._goal_pose):
+            self.state.add_log(LogLevel.INFO, "TRANSPORT_COMPLETE",
+                               "Transport completed, object stable")
+            self.state.state = StateCode.MOVING_TO_PLACE
+            self._state_timer = 0.0
 
-            # 检查真空
-            kpa = self.vacuum.read_pressure()
-            self.state.vacuum_kpa = kpa
-            self.state.vacuum_ok = self.vacuum.vacuum_ok
-
-            if not self.state.vacuum_ok:
-                self.state.add_log(LogLevel.ERROR, EventCode.DROP_DETECTED.value,
-                                   f"Drop detected during transport! pressure={kpa:.1f}kPa")
-                self.state.recover_count += 1
-                self.state.state = StateCode.AUTO_RECOVERY_MODE
-                return
-
-            await asyncio.sleep(0.1)
-
-        # 到达放置点上方
-        self.state.add_log(LogLevel.INFO, "TRANSPORT_COMPLETE",
-                           "Transport completed, object stable")
-        self.state.state = StateCode.MOVING_TO_PLACE
-
-    async def _handle_moving_to_place(self):
+    async def _handle_moving_to_place(self, dt: float):
         """MOVING_TO_PLACE: 移动到放置位置"""
-        px, py, pz = self._place_position
+        self._goal_pose = {
+            "x_m": self._place_position["x_m"],
+            "y_m": self._place_position["y_m"],
+            "z_m": self._place_position["z_m"]
+        }
 
-        # 下降到放置高度
-        await asyncio.to_thread(self.robot.move_to, px, py, pz)
+        if self.robot.is_at_goal(self._goal_pose):
+            self.state.add_log(LogLevel.INFO, "AT_PLACE_POSITION",
+                               f"Arrived at place position")
+            self.state.state = StateCode.RELEASING_LOAD
+            self._state_timer = 0.0
 
-        self.state.add_log(LogLevel.INFO, "AT_PLACE_POSITION",
-                           f"Arrived at place position ({px:.3f}, {py:.3f}, {pz:.3f})")
-        self.state.state = StateCode.RELEASING_LOAD
-
-    async def _handle_releasing_load(self):
+    async def _handle_releasing_load(self, dt: float):
         """RELEASING_LOAD: 释放负载"""
-        # 关闭真空
-        self.vacuum.turn_off()
-        self.state.add_log(LogLevel.INFO, EventCode.VACUUM_OFF_RELEASE.value,
-                           "Vacuum turned OFF, releasing load")
+        if self._state_timer < 0.1:
+            return
 
-        await asyncio.sleep(0.2)
+        if self.grip.vacuum_on:
+            self.vacuum.turn_off()
+            self.state.add_log(LogLevel.INFO, EventCode.VACUUM_OFF_RELEASE.value,
+                               "Vacuum turned OFF, releasing load")
+            return
 
-        self.state.state = StateCode.RETURNING_HOME
+        if self._state_timer > 0.3:
+            self.state.state = StateCode.RETURNING_HOME
+            self._state_timer = 0.0
 
-    async def _handle_returning_home(self):
+    async def _handle_returning_home(self, dt: float):
         """RETURNING_HOME: 返回原点"""
-        # 抬起到安全高度
-        self.robot.go_to_safe_z()
+        self._goal_pose = self._safe_pose.copy()
 
-        # 返回原点
-        await asyncio.to_thread(self.robot.move_to, 0, 0, self.robot.safe_z)
+        if self.robot.is_at_goal(self._goal_pose):
+            self.state.success_count += 1
+            self.state.add_log(LogLevel.INFO, EventCode.CYCLE_SUCCESS.value,
+                               f"Cycle completed successfully! Total success: {self.state.success_count}")
 
-        self.state.success_count += 1
-        self.state.add_log(LogLevel.INFO, EventCode.CYCLE_SUCCESS.value,
-                           f"Cycle completed successfully! Total success: {self.state.success_count}")
+            # 回到 IDLE，等待下次手动启动
+            self._running = False
+            self.state.state = StateCode.IDLE
+            self.state.add_log(LogLevel.INFO, "CYCLE_END", "Returned to IDLE, ready for next start")
 
-        # 回到 IDLE，等待下次手动启动
-        self._running = False
-        self.state.state = StateCode.IDLE
-        self.state.add_log(LogLevel.INFO, "CYCLE_END", "Returned to IDLE, ready for next start")
-
-    async def _handle_auto_retrying_grasp(self):
+    async def _handle_auto_retrying_grasp(self, dt: float):
         """AUTO_RETRYING_GRASP: 自动重试抓取"""
+        # 先回到安全高度
+        self._goal_pose = {
+            "x_m": self.robot.x,
+            "y_m": self.robot.y,
+            "z_m": self.robot.safe_z
+        }
+
+        if self._state_timer < 0.3:
+            return  # 等待稳定
+
+        self.vacuum.turn_off()
+
         self.state.retry_count += 1
 
         if self.state.retry_count > MAX_RETRY:
@@ -327,44 +436,44 @@ class GraspFSM:
         self.state.add_log(LogLevel.WARN, "RETRY_ATTEMPT",
                            f"Retry #{self.state.retry_count}/9 with offset ({dx*1000:.0f}mm, {dy*1000:.0f}mm)")
 
-        # 确保真空关闭
-        self.vacuum.turn_off()
-
-        # 回到安全高度后重新接近
-        self.robot.go_to_safe_z()
         self.state.state = StateCode.MOVING_TO_PREGRASP
+        self._state_timer = 0.0
 
-    async def _handle_auto_recovery_mode(self):
+    async def _handle_auto_recovery_mode(self, dt: float):
         """AUTO_RECOVERY_MODE: 自动恢复模式"""
-        self.state.add_log(LogLevel.WARN, EventCode.RECOVERY_TRIGGERED.value,
-                           "Entering auto recovery mode")
+        if self._state_timer < 0.1:
+            self.state.add_log(LogLevel.WARN, EventCode.RECOVERY_TRIGGERED.value,
+                               "Entering auto recovery mode")
+            self.robot.stop()
 
-        # 停止机器人
-        self.robot.stop()
+        # 抬到安全高度
+        self._goal_pose = {
+            "x_m": self.robot.x,
+            "y_m": self.robot.y,
+            "z_m": self.robot.safe_z
+        }
 
-        # 确保真空关闭
-        self.vacuum.turn_off()
+        if self._state_timer > 0.5:
+            self.vacuum.turn_off()
 
-        # 移动到安全高度
-        self.robot.go_to_safe_z()
+        if self._state_timer > 1.0:
+            self.state.add_log(LogLevel.INFO, "RECOVERY_COMPLETE",
+                               "Recovery complete, restarting cycle")
 
-        await asyncio.sleep(0.2)
+            # 重新开始检测
+            self._current_offset_idx = 0
+            self._fault_injected = False
+            self.vision.start_scan()
+            self.state.state = StateCode.DETECTING_TARGET
+            self._state_timer = 0.0
 
-        self.state.add_log(LogLevel.INFO, "RECOVERY_COMPLETE",
-                           "Recovery complete, restarting cycle")
-
-        # 重新开始检测
-        self._current_offset_idx = 0
-        self.state.state = StateCode.DETECTING_TARGET
-
-    async def _handle_fault_latched(self):
+    async def _handle_fault_latched(self, dt: float):
         """FAULT_LATCHED: 故障锁定"""
-        # 停止所有操作，等待手动重置
         self._running = False
+        self._goal_pose = None
         self.vacuum.turn_off()
         self.robot.stop()
 
-        # 只在首次进入时记录日志
         if self.state.last_event != "FAULT_LATCHED_LOGGED":
             self.state.add_log(LogLevel.ERROR, "FAULT_LATCHED_LOGGED",
                                "System in FAULT_LATCHED state, manual reset required")
