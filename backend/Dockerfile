@@ -1,6 +1,6 @@
 # Vacuum Grasp Dashboard Backend
 # Build context should be the repository root (docker-compose sets this)
-FROM python:3.11-slim
+FROM m.daocloud.io/docker.io/library/python:3.11-slim
 
 WORKDIR /app
 
