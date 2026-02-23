@@ -4,10 +4,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Vacuum Grasp Dashboard</title>
-    <!-- Tailwind CSS CDN -->
-    <script src="https://cdn.tailwindcss.com"></script>
-    <!-- Chart.js CDN (保留用于真空曲线) -->
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Tailwind CSS (本地托管，避免外网 CDN 依赖) -->
+    <script src="/static/vendor/tailwind/tailwind-playcdn.js"></script>
+    <!-- Chart.js (本地托管) -->
+    <script src="/static/vendor/chartjs/chart.umd.min.js"></script>
     <style>
         body { background-color: #0f172a; }
         .scrollbar-thin::-webkit-scrollbar { width: 6px; }
@@ -194,8 +194,8 @@
 
     <!-- Three.js Module -->
     <script type="module">
-import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js";
-import { OrbitControls } from "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/controls/OrbitControls.js";
+import * as THREE from "/static/vendor/three/three.module.js";
+import { OrbitControls } from "/static/vendor/three/OrbitControls.js";
 
 // ============ State ============
 let ws = null;
@@ -824,6 +824,181 @@ document.getElementById('btn-clear-log').addEventListener('click', () => {
 
 // Initialize
 connectWebSocket();
+window.__threeModuleHealthy = true;
+    </script>
+    <script>
+        // Fallback core: if module script fails, keep controls usable.
+        (function () {
+            function setupFallbackCore() {
+                const wsIndicator = document.getElementById("ws-indicator");
+                const wsStatus = document.getElementById("ws-status");
+                const stateDisplay = document.getElementById("state-display");
+                const vacuumIndicator = document.getElementById("vacuum-indicator");
+                const vacuumKpa = document.getElementById("vacuum-kpa");
+                const counterSuccess = document.getElementById("counter-success");
+                const counterRetry = document.getElementById("counter-retry");
+                const counterRecover = document.getElementById("counter-recover");
+                const lastEvent = document.getElementById("last-event");
+                const logContainer = document.getElementById("log-container");
+
+                const workspace = document.getElementById("workspace3d");
+                if (workspace) {
+                    const msg = document.createElement("div");
+                    msg.style.cssText = "position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#94a3b8;font:14px system-ui;background:rgba(2,6,23,.35);z-index:1;";
+                    msg.textContent = "3D 模块加载失败（CDN 不可达），已启用控制面板兜底模式。";
+                    workspace.appendChild(msg);
+                }
+
+                function updateStateColor(state) {
+                    const colors = {
+                        IDLE: "text-slate-400",
+                        DETECTING_TARGET: "text-blue-400",
+                        PLANNING_APPROACH: "text-blue-400",
+                        MOVING_TO_PREGRASP: "text-cyan-400",
+                        DESCENDING_TO_CONTACT: "text-cyan-400",
+                        PRE_SUCTION_CHECK: "text-amber-400",
+                        LIFT_VERIFICATION: "text-amber-400",
+                        TRANSPORT_MONITORING: "text-emerald-400",
+                        MOVING_TO_PLACE: "text-emerald-400",
+                        RELEASING_LOAD: "text-purple-400",
+                        RETURNING_HOME: "text-purple-400",
+                        AUTO_RETRYING_GRASP: "text-yellow-400",
+                        AUTO_RECOVERY_MODE: "text-orange-400",
+                        FAULT_LATCHED: "text-red-500"
+                    };
+                    stateDisplay.className = "text-3xl font-mono font-bold " + (colors[state] || "text-slate-400");
+                }
+
+                function renderLogs(logs) {
+                    if (!logs || !logs.length) {
+                        logContainer.innerHTML = '<div class="text-slate-500">No logs yet...</div>';
+                        return;
+                    }
+                    const html = logs.slice(-30).map((log) => {
+                        const levelClass = log.level === "ERROR" ? "log-error" : (log.level === "WARN" ? "log-warn" : "log-info");
+                        const time = new Date(log.ts * 1000).toLocaleTimeString();
+                        return `<div class="${levelClass}">[${time}] ${log.code}: ${log.msg}</div>`;
+                    }).join("");
+                    logContainer.innerHTML = html;
+                    logContainer.scrollTop = logContainer.scrollHeight;
+                }
+
+                function updateUI(data) {
+                    stateDisplay.textContent = data.state || "IDLE";
+                    updateStateColor(data.state || "IDLE");
+                    counterSuccess.textContent = data.success_count ?? 0;
+                    counterRetry.textContent = data.retry_count ?? 0;
+                    counterRecover.textContent = data.recover_count ?? 0;
+                    lastEvent.textContent = data.last_event || "--";
+                    if (typeof data.vacuum_kpa === "number") {
+                        vacuumKpa.textContent = `${data.vacuum_kpa.toFixed(1)} kPa`;
+                    } else {
+                        vacuumKpa.textContent = "-- kPa";
+                    }
+                    if (data.vacuum_ok) {
+                        vacuumIndicator.classList.remove("bg-slate-600", "bg-red-500");
+                        vacuumIndicator.classList.add("bg-emerald-500");
+                    } else {
+                        vacuumIndicator.classList.remove("bg-slate-600", "bg-emerald-500");
+                        vacuumIndicator.classList.add("bg-red-500");
+                    }
+                    const robotPose = data.robot_pose || {};
+                    const vision = data.vision || { detected: false, confidence: 0 };
+                    const grip = data.grip || { vacuum_on: false, sealed: false };
+                    const rx = document.getElementById("robot-x");
+                    const ry = document.getElementById("robot-y");
+                    const rz = document.getElementById("robot-z");
+                    const vd = document.getElementById("vision-detected");
+                    const vc = document.getElementById("vision-confidence");
+                    const gv = document.getElementById("grip-vacuum");
+                    const gs = document.getElementById("grip-sealed");
+                    if (rx && typeof robotPose.x_m === "number") rx.textContent = robotPose.x_m.toFixed(3);
+                    if (ry && typeof robotPose.y_m === "number") ry.textContent = robotPose.y_m.toFixed(3);
+                    if (rz && typeof robotPose.z_m === "number") rz.textContent = robotPose.z_m.toFixed(3);
+                    if (vd) vd.textContent = vision.detected ? "Yes" : "No";
+                    if (vc) vc.textContent = Number(vision.confidence || 0).toFixed(2);
+                    if (gv) gv.textContent = grip.vacuum_on ? "ON" : "OFF";
+                    if (gs) gs.textContent = grip.sealed ? "YES" : "NO";
+                    renderLogs(data.log || []);
+                }
+
+                let ws = null;
+                let reconnectAttempts = 0;
+                const reconnectDelays = [1000, 2000, 4000, 8000, 10000];
+                function connectWebSocket() {
+                    const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+                    const wsUrl = `${protocol}//${location.host}/ws`;
+                    ws = new WebSocket(wsUrl);
+                    ws.onopen = () => {
+                        reconnectAttempts = 0;
+                        wsIndicator.classList.remove("bg-red-500", "bg-yellow-500", "animate-pulse-slow");
+                        wsIndicator.classList.add("bg-emerald-500");
+                        wsStatus.textContent = "Connected (fallback core)";
+                    };
+                    ws.onclose = () => {
+                        const delay = reconnectDelays[Math.min(reconnectAttempts, reconnectDelays.length - 1)];
+                        reconnectAttempts += 1;
+                        wsIndicator.classList.remove("bg-emerald-500");
+                        wsIndicator.classList.add("bg-yellow-500", "animate-pulse-slow");
+                        wsStatus.textContent = `Reconnecting in ${delay / 1000}s...`;
+                        setTimeout(connectWebSocket, delay);
+                    };
+                    ws.onmessage = (event) => {
+                        try {
+                            updateUI(JSON.parse(event.data));
+                        } catch (_) {
+                            // noop
+                        }
+                    };
+                }
+
+                async function apiCall(endpoint) {
+                    try {
+                        await fetch(endpoint, { method: "POST" });
+                    } catch (err) {
+                        console.error("API call failed:", err);
+                    }
+                }
+
+                const on = (id, fn) => {
+                    const el = document.getElementById(id);
+                    if (el && !el.dataset.boundFallback) {
+                        el.dataset.boundFallback = "1";
+                        el.addEventListener("click", fn);
+                    }
+                };
+
+                on("btn-start", () => apiCall("/api/fsm/start"));
+                on("btn-stop", () => apiCall("/api/fsm/stop"));
+                on("btn-reset", () => {
+                    if (confirm("Reset FSM? This will clear all counters and return to IDLE.")) {
+                        apiCall("/api/fsm/reset");
+                    }
+                });
+                on("btn-fault-pre", () => {
+                    if (confirm("Inject fault: Next pre-suction check will fail?")) {
+                        apiCall("/api/fault/next_pre_suction_fail");
+                    }
+                });
+                on("btn-fault-drop", () => {
+                    if (confirm("Inject fault: Drop object during next transport?")) {
+                        apiCall("/api/fault/drop_once");
+                    }
+                });
+                on("btn-clear-log", () => apiCall("/api/log/clear"));
+
+                connectWebSocket();
+            }
+
+            window.addEventListener("load", function () {
+                setTimeout(function () {
+                    if (!window.__threeModuleHealthy) {
+                        console.warn("3D module unhealthy, enabling fallback core.");
+                        setupFallbackCore();
+                    }
+                }, 1200);
+            });
+        })();
     </script>
 </body>
 </html>

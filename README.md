@@ -6,6 +6,7 @@
 
 - **14状态FSM**: 完整的抓取流程状态机
 - **3D可视化**: three.js 实时渲染机械臂、VGC10吸盘阵列、托盘
+- **离线可用前端依赖**: three.js / OrbitControls / Tailwind / Chart.js 全部本地托管
 - **故障注入**: 支持预吸取失败、搬运掉压两种故障场景
 - **自动重试**: 3x3网格偏移重试（中心→四邻→四角）
 - **自动恢复**: 掉压检测后自动进入恢复模式
@@ -27,7 +28,8 @@ robert_arm_sensor/
 │   ├── requirements.txt
 │   └── Dockerfile
 ├── frontend/
-│   └── index.html           # 单页应用 (three.js 3D工作区)
+│   ├── index.html           # 单页应用 (three.js 3D工作区)
+│   └── vendor/              # 本地前端依赖 (three/tailwind/chartjs)
 ├── docker-compose.yml
 └── README.md
 ```
