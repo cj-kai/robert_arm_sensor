@@ -1,6 +1,7 @@
-"""模拟器：VisionSim, VacuumSim, RobotSim, GripSim"""
+"""模拟器：VisionSim, VacuumSim, RobotSim, GripSim, JointRobotSim"""
 import random
 import time
+import math
 from typing import Optional, Tuple, List, Dict
 from dataclasses import dataclass
 
@@ -323,3 +324,60 @@ class GripSim:
         self.sealed = False
         self._seal_timer = 0.0
         self._release_timer = 0.0
+
+
+class JointRobotSim:
+    """6轴关节机器人模拟器（用于 URDF 关节驱动）"""
+
+    def __init__(self):
+        # [q1..q6] in radians
+        self.joint_angles = [0.0, -1.1, 1.6, 0.6, 1.57, 0.0]
+        self._target_angles = self.joint_angles.copy()
+        self.max_speed_rad_s = 1.2
+
+    def set_target(self, target_angles: List[float]):
+        """设置目标关节角"""
+        if len(target_angles) != 6:
+            raise ValueError("target_angles must contain 6 joints")
+        self._target_angles = target_angles.copy()
+
+    def step(self, dt: float):
+        """按最大角速度插值到目标角"""
+        max_step = self.max_speed_rad_s * dt
+        for i in range(6):
+            err = self._target_angles[i] - self.joint_angles[i]
+            if abs(err) <= max_step:
+                self.joint_angles[i] = self._target_angles[i]
+            else:
+                self.joint_angles[i] += max_step if err > 0 else -max_step
+
+    def is_at_target(self, threshold: float = 0.02) -> bool:
+        """判断是否到达目标关节角"""
+        return all(abs(self._target_angles[i] - self.joint_angles[i]) <= threshold for i in range(6))
+
+    def get_joint_angles(self) -> List[float]:
+        """获取当前关节角列表"""
+        return [round(q, 4) for q in self.joint_angles]
+
+    def get_pose_dict(self) -> Dict[str, float]:
+        """基于前3轴的简化正运动学估算 TCP 位姿（用于兼容现有 UI）"""
+        q1, q2, q3, q4, q5, q6 = self.joint_angles
+        l1 = 0.28
+        l2 = 0.24
+        radial = 0.10 + l1 * math.cos(q2) + l2 * math.cos(q2 + q3)
+        z = 0.12 + l1 * math.sin(-q2) + l2 * math.sin(-(q2 + q3))
+        x = radial * math.cos(q1)
+        y = radial * math.sin(q1)
+        return {
+            "x_m": round(x, 4),
+            "y_m": round(y, 4),
+            "z_m": round(max(0.02, z), 4),
+            "roll_deg": round(math.degrees(q4), 1),
+            "pitch_deg": round(math.degrees(q5), 1),
+            "yaw_deg": round(math.degrees(q6), 1),
+        }
+
+    def reset(self):
+        """重置到初始姿态"""
+        self.joint_angles = [0.0, -1.1, 1.6, 0.6, 1.57, 0.0]
+        self._target_angles = self.joint_angles.copy()

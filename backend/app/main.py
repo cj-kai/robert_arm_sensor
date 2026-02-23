@@ -60,17 +60,17 @@ async def websocket_endpoint(websocket: WebSocket):
 
 
 async def broadcast_state():
-    """后台任务：每100ms广播系统状态"""
+    """后台任务：每50ms广播系统状态"""
     while True:
         try:
             state_data = fsm.state.to_dict()
             await ws_manager.broadcast(state_data)
-            await asyncio.sleep(0.1)  # 100ms
+            await asyncio.sleep(0.05)  # 50ms
         except asyncio.CancelledError:
             break
         except Exception as e:
             print(f"Broadcast error: {e}")
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.05)
 
 
 # ==================== REST API ====================

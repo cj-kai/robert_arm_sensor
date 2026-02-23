@@ -1,0 +1,120 @@
+<?xml version="1.0"?>
+<robot name="crx20ial_urdf_demo">
+  <link name="base_link">
+    <visual>
+      <origin xyz="0 0 0.04" rpy="0 0 0"/>
+      <geometry><cylinder radius="0.12" length="0.08"/></geometry>
+      <material name="dark"><color rgba="0.07 0.10 0.16 1.0"/></material>
+    </visual>
+  </link>
+
+  <link name="link_1">
+    <visual>
+      <origin xyz="0 0 0.11" rpy="0 0 0"/>
+      <geometry><cylinder radius="0.065" length="0.22"/></geometry>
+      <material name="white"><color rgba="0.93 0.95 0.98 1.0"/></material>
+    </visual>
+  </link>
+
+  <joint name="shoulder_pan_joint" type="revolute">
+    <origin xyz="0 0 0.08" rpy="0 0 0"/>
+    <parent link="base_link"/>
+    <child link="link_1"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-3.14" upper="3.14" effort="200" velocity="1.8"/>
+  </joint>
+
+  <link name="link_2">
+    <visual>
+      <origin xyz="0 0.18 0" rpy="0 0 0"/>
+      <geometry><box size="0.08 0.36 0.08"/></geometry>
+      <material name="white"/>
+    </visual>
+  </link>
+
+  <joint name="shoulder_lift_joint" type="revolute">
+    <origin xyz="0 0 0.22" rpy="0 0 0"/>
+    <parent link="link_1"/>
+    <child link="link_2"/>
+    <axis xyz="1 0 0"/>
+    <limit lower="-2.3" upper="2.3" effort="200" velocity="1.8"/>
+  </joint>
+
+  <link name="link_3">
+    <visual>
+      <origin xyz="0 0.16 0" rpy="0 0 0"/>
+      <geometry><box size="0.07 0.32 0.07"/></geometry>
+      <material name="white"/>
+    </visual>
+  </link>
+
+  <joint name="elbow_joint" type="revolute">
+    <origin xyz="0 0.36 0" rpy="0 0 0"/>
+    <parent link="link_2"/>
+    <child link="link_3"/>
+    <axis xyz="1 0 0"/>
+    <limit lower="-2.5" upper="2.5" effort="180" velocity="2.0"/>
+  </joint>
+
+  <link name="link_4">
+    <visual>
+      <origin xyz="0 0.10 0" rpy="0 0 0"/>
+      <geometry><box size="0.065 0.20 0.065"/></geometry>
+      <material name="white"/>
+    </visual>
+  </link>
+
+  <joint name="wrist_1_joint" type="revolute">
+    <origin xyz="0 0.32 0" rpy="0 0 0"/>
+    <parent link="link_3"/>
+    <child link="link_4"/>
+    <axis xyz="1 0 0"/>
+    <limit lower="-3.14" upper="3.14" effort="120" velocity="2.2"/>
+  </joint>
+
+  <link name="link_5">
+    <visual>
+      <origin xyz="0 0.08 0" rpy="0 0 0"/>
+      <geometry><box size="0.055 0.16 0.055"/></geometry>
+      <material name="green"><color rgba="0.23 0.82 0.44 1.0"/></material>
+    </visual>
+  </link>
+
+  <joint name="wrist_2_joint" type="revolute">
+    <origin xyz="0 0.20 0" rpy="0 0 0"/>
+    <parent link="link_4"/>
+    <child link="link_5"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-3.14" upper="3.14" effort="100" velocity="2.6"/>
+  </joint>
+
+  <link name="link_6">
+    <visual>
+      <origin xyz="0 0.05 0" rpy="0 0 0"/>
+      <geometry><box size="0.05 0.10 0.05"/></geometry>
+      <material name="white"/>
+    </visual>
+  </link>
+
+  <joint name="wrist_3_joint" type="revolute">
+    <origin xyz="0 0.16 0" rpy="0 0 0"/>
+    <parent link="link_5"/>
+    <child link="link_6"/>
+    <axis xyz="1 0 0"/>
+    <limit lower="-3.14" upper="3.14" effort="100" velocity="2.6"/>
+  </joint>
+
+  <link name="tool0">
+    <visual>
+      <origin xyz="0 0.04 0" rpy="0 0 0"/>
+      <geometry><sphere radius="0.025"/></geometry>
+      <material name="tool"><color rgba="0.6 0.65 0.7 1.0"/></material>
+    </visual>
+  </link>
+
+  <joint name="tool0_fixed" type="fixed">
+    <origin xyz="0 0.11 0" rpy="0 0 0"/>
+    <parent link="link_6"/>
+    <child link="tool0"/>
+  </joint>
+</robot>

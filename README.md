@@ -5,7 +5,7 @@
 ## 功能特性
 
 - **14状态FSM**: 完整的抓取流程状态机
-- **3D可视化**: three.js 实时渲染机械臂、VGC10吸盘阵列、托盘
+- **3D可视化**: three.js + URDFLoader 实时渲染 6 轴工业机械臂（CRX-20iA/L 风格）
 - **离线可用前端依赖**: three.js / OrbitControls / Tailwind / Chart.js 全部本地托管
 - **故障注入**: 支持预吸取失败、搬运掉压两种故障场景
 - **自动重试**: 3x3网格偏移重试（中心→四邻→四角）
@@ -28,8 +28,11 @@ robert_arm_sensor/
 │   ├── requirements.txt
 │   └── Dockerfile
 ├── frontend/
-│   ├── index.html           # 单页应用 (three.js 3D工作区)
-│   └── vendor/              # 本地前端依赖 (three/tailwind/chartjs)
+│   ├── index.html           # 单页应用 (URDF 3D工作区)
+│   ├── assets/robot/crx20ial/
+│   │   ├── robot.urdf       # 6轴机械臂 URDF 模型
+│   │   └── meshes/          # 可替换为真实 CRX meshes
+│   └── vendor/              # 本地前端依赖 (three/tailwind/chartjs/urdfloader)
 ├── docker-compose.yml
 └── README.md
 ```
@@ -141,7 +144,7 @@ docker compose logs -f
 ### WebSocket
 
 - 端点: `/ws`
-- 推送频率: 30ms
+- 推送频率: 50ms
 - 推送格式:
 ```json
 {
@@ -155,6 +158,7 @@ docker compose logs -f
   "last_event": "VACUUM_ON",
   "log": [...],
   "robot_pose": {"x_m": 0.25, "y_m": 0.10, "z_m": 0.15, "roll_deg": 0, "pitch_deg": 90, "yaw_deg": 0},
+  "joint_angles_rad": [0.12, -1.20, 1.78, 0.52, 1.57, -0.31],
   "target_pose": {"x_m": 0.35, "y_m": 0.12, "z_m": 0.0},
   "place_pose": {"x_m": -0.25, "y_m": 0.25, "z_m": 0.05},
   "vision": {"detected": true, "confidence": 0.92},
@@ -186,9 +190,11 @@ docker compose logs -f
 
 | 元素 | 描述 |
 |------|------|
-| CRX 机械臂 | 白色底座 + 3段连杆 + 绿色关节球 |
+| CRX 机械臂 | URDF 6 轴工业机械臂（按 joint_angles_rad 实时驱动） |
 | VGC10 末端 | 灰色方盒 + 10个吸盘（状态变色） |
 | 托盘 | 蓝色半透明（目标位置） |
+| 传送带 | 深色长条传送带（抓取区域） |
+| 货架 | 多层框架（放置区背景） |
 | 放置区 | 绿色半透明（放置位置） |
 | 标记球 | 红色（视觉检测点） |
 
@@ -226,6 +232,15 @@ docker compose logs -f
 - `backend/app/simulator.py` 中的 `GripSim` → 接入真实夹具控制器
 
 FSM 逻辑和 API 保持不变。
+
+## 更换 URDF 机器人模型
+
+1. 将新模型资源放入 `frontend/assets/robot/<your_robot>/`，确保存在可访问的 `robot.urdf`。
+2. 若 URDF 使用 mesh，确保引用路径为浏览器可访问的相对路径（不要保留 `package://`）。
+3. 在 `frontend/index.html` 中修改加载路径：
+   - `loader.loadAsync('/static/assets/robot/<your_robot>/robot.urdf')`
+4. 按你的机器人关节名称更新 `JOINT_NAMES` 映射顺序。
+5. 后端继续输出 `joint_angles_rad:[q1..q6]` 即可驱动关节。
 
 ## 许可证
 

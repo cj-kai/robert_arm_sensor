@@ -88,6 +88,10 @@ def _default_fault() -> dict:
     """默认故障状态"""
     return {"active": False, "code": "", "msg": ""}
 
+def _default_joint_angles() -> list:
+    """默认关节角（弧度，6轴）"""
+    return [0.0, -1.1, 1.6, 0.6, 1.57, 0.0]
+
 
 @dataclass
 class SystemState:
@@ -108,6 +112,7 @@ class SystemState:
     vision: dict = field(default_factory=_default_vision)
     grip: dict = field(default_factory=_default_grip)
     fault: dict = field(default_factory=_default_fault)
+    joint_angles_rad: list = field(default_factory=_default_joint_angles)
 
     def add_log(self, level: LogLevel, code: str, msg: str):
         """添加日志"""
@@ -148,6 +153,7 @@ class SystemState:
             "vision": self.vision,
             "grip": self.grip,
             "fault": self.fault,
+            "joint_angles_rad": self.joint_angles_rad,
         }
 
 
