@@ -172,6 +172,18 @@ def _default_washer() -> dict:
     }
 
 
+def _default_tray_body() -> dict:
+    return {
+        "visible": False,
+        "tray_id": "",
+        "bound_to_tool": False,
+        "gravity_enabled": True,
+        "is_clean": False,
+        "dims_m": {"x_m": 0.4, "y_m": 0.4, "z_m": 0.05},
+        "pose": {"x_m": -1.50, "y_m": 1.20, "z_m": 0.80},
+    }
+
+
 @dataclass
 class SystemState:
     state: StateCode = StateCode.IDLE
@@ -200,6 +212,7 @@ class SystemState:
     calibration: dict = field(default_factory=_default_calibration)
     payload: dict = field(default_factory=_default_payload)
     washer: dict = field(default_factory=_default_washer)
+    tray_body: dict = field(default_factory=_default_tray_body)
 
     def add_log(self, level: LogLevel, code: str, msg: str) -> None:
         entry = LogEntry(ts=time.time(), level=level, code=code, msg=msg)
@@ -238,6 +251,7 @@ class SystemState:
             "calibration": self.calibration,
             "payload": self.payload,
             "washer": self.washer,
+            "tray_body": self.tray_body,
         }
 
 

@@ -248,7 +248,8 @@ let latest = {
     task: {name: 'clean_to_conveyor_to_dirty', phase: 'WAITING', cycle_id: '', paused: false},
     safety: {web_motion_allowed: false, manual_jog_enabled: false},
     payload: {kind: 'square_tray_10_75', label: 'Square Tray 10.75', dims_m: {x_m: 0.2731, y_m: 0.2731, z_m: 0.0318}, tag_size_m: 0.05, is_clean: false},
-    washer: {model: 'MIMASA DA-80', mode: 'simulated', busy: false, done: false, cycle_time_s: 12, remaining_s: 0}
+    washer: {model: 'MIMASA DA-80', mode: 'simulated', busy: false, done: false, cycle_time_s: 12, remaining_s: 0},
+    tray_body: {visible: false, tray_id: '', bound_to_tool: false, gravity_enabled: true, is_clean: false, dims_m: {x_m: 0.4, y_m: 0.4, z_m: 0.05}, pose: {x_m: -1.5, y_m: 1.2, z_m: 0.8}}
 };
 
 // ============ DOM Elements ============
@@ -919,7 +920,10 @@ async function buildThreeApp(THREE, OrbitControls, URDFLoaderClass = null) {
                     asNumber(pp.y_m, WORKCELL_LAYOUT.washerLoad.y_m)
                 );
 
-                const dims = data.payload?.dims_m || {};
+                const backendTrayBody = data.tray_body || {};
+                const backendTrayPose = backendTrayBody.pose || null;
+                const hasBackendTrayPose = !!backendTrayBody.visible && !!backendTrayPose;
+                const dims = (backendTrayBody.dims_m || data.payload?.dims_m || {});
                 const dx = Math.max(0.12, asNumber(dims.x_m, TRAY_BASE_DIMS.x_m));
                 const dy = Math.max(0.08, asNumber(dims.y_m, TRAY_BASE_DIMS.y_m));
                 const dz = Math.max(0.012, asNumber(dims.z_m, TRAY_BASE_DIMS.z_m));
@@ -928,6 +932,11 @@ async function buildThreeApp(THREE, OrbitControls, URDFLoaderClass = null) {
                 const stateCode = String(data.state || '');
                 const flowStage = String(data.washer?.flow_stage || trayLastFlowStage || 'DIRTY_TO_WASHER');
                 trayLastFlowStage = flowStage;
+                const washerBusy = !!data.washer?.busy;
+                const washerDone = !!data.washer?.done;
+                const washerProgress = (asNumber(data.washer?.cycle_time_s, 0) > 0)
+                    ? 1 - (asNumber(data.washer?.remaining_s, 0) / asNumber(data.washer?.cycle_time_s, 1))
+                    : 0;
                 const cycleId = String(data.task?.cycle_id || '');
                 if (cycleId !== trayCycleId) {
                     trayCycleId = cycleId;
@@ -954,42 +963,44 @@ async function buildThreeApp(THREE, OrbitControls, URDFLoaderClass = null) {
                 );
                 const pickupCloseEnough = sideContactTruth.distanceTo(targetGoal) < Math.max(0.14, Math.min(0.28, dx * 0.6));
                 const carryEligible = !!data.grip?.sealed && carryingStates.has(stateCode);
-
-                if (!trayAttached && carryEligible && pickupCloseEnough) {
-                    trayAttached = true;
-                    trayAttachBlend = 0;
-                }
-                if (trayAttached && !carryEligible) {
-                    trayAttached = false;
-                    trayAttachBlend = 0;
-                }
-
-                const washerBusy = !!data.washer?.busy;
-                const washerDone = !!data.washer?.done;
-                const washerProgress = (asNumber(data.washer?.cycle_time_s, 0) > 0)
-                    ? 1 - (asNumber(data.washer?.remaining_s, 0) / asNumber(data.washer?.cycle_time_s, 1))
-                    : 0;
-
-                if (trayAttached) {
-                    trayAttachBlend = Math.min(1, trayAttachBlend + 0.10);
-                    const carrySide = eeForCarry.x <= 0 ? 1 : -1;
-                    const carryGoal = new THREE.Vector3(
-                        eeForCarry.x + carrySide * (dx / 2 + 0.06),
-                        Math.max(dz / 2 + 0.01, eeForCarry.y),
-                        eeForCarry.z
-                    );
-                    trayGoal.copy(targetGoal).lerp(carryGoal, trayAttachBlend);
-                } else if (washerBusy || (flowStage === 'WASHER_PROCESS' && !washerDone)) {
-                    trayGoal.copy(sampleWasherReturnPath(washerProgress, dz));
-                } else if (washerDone && flowStage === 'WASHER_TO_CLEAN') {
-                    trayGoal.copy(targetGoal);
-                } else if (data.payload?.is_clean && stateCode === 'IDLE') {
-                    trayGoal.copy(placeGoal);
+                if (hasBackendTrayPose) {
+                    const trayMapped = mapPose(backendTrayPose);
+                    trayGoal.set(trayMapped.x, Math.max(dz / 2, trayMapped.y), trayMapped.z);
+                    trayAttached = !!backendTrayBody.bound_to_tool;
+                    trayAttachBlend = trayAttached ? 1 : 0;
                 } else {
-                    trayGoal.copy(targetGoal);
+                    if (!trayAttached && carryEligible && pickupCloseEnough) {
+                        trayAttached = true;
+                        trayAttachBlend = 0;
+                    }
+                    if (trayAttached && !carryEligible) {
+                        trayAttached = false;
+                        trayAttachBlend = 0;
+                    }
+
+                    if (trayAttached) {
+                        trayAttachBlend = Math.min(1, trayAttachBlend + 0.10);
+                        const carrySide = eeForCarry.x <= 0 ? 1 : -1;
+                        const carryGoal = new THREE.Vector3(
+                            eeForCarry.x + carrySide * (dx / 2 + 0.06),
+                            Math.max(dz / 2 + 0.01, eeForCarry.y),
+                            eeForCarry.z
+                        );
+                        trayGoal.copy(targetGoal).lerp(carryGoal, trayAttachBlend);
+                    } else if (washerBusy || (flowStage === 'WASHER_PROCESS' && !washerDone)) {
+                        trayGoal.copy(sampleWasherReturnPath(washerProgress, dz));
+                    } else if (washerDone && flowStage === 'WASHER_TO_CLEAN') {
+                        trayGoal.copy(targetGoal);
+                    } else if (data.payload?.is_clean && stateCode === 'IDLE') {
+                        trayGoal.copy(placeGoal);
+                    } else {
+                        trayGoal.copy(targetGoal);
+                    }
                 }
 
-                const trayFollowAlpha = trayAttached ? 0.28 : (washerBusy ? 0.16 : 0.22);
+                const trayFollowAlpha = hasBackendTrayPose ? (trayAttached ? 0.42 : 0.30) : (trayAttached ? 0.28 : (washerBusy ? 0.16 : 0.22));
+                tray.visible = !!(backendTrayBody.visible ?? true);
+                marker.visible = tray.visible;
                 trayVisualPos.lerp(trayGoal, trayFollowAlpha);
                 tray.position.copy(trayVisualPos);
 
@@ -1000,9 +1011,10 @@ async function buildThreeApp(THREE, OrbitControls, URDFLoaderClass = null) {
                     tray.position.z
                 );
                 const isCarrying = trayAttached;
-                marker.visible = !isCarrying && !washerBusy;
-                tray.material.color.setHex(data.payload?.is_clean ? 0x22c55e : 0xf59e0b);
-                placeZone.material.color.setHex(data.payload?.is_clean ? 0x22c55e : 0x86efac);
+                marker.visible = tray.visible && !isCarrying && !washerBusy;
+                const trayIsClean = !!(backendTrayBody.is_clean ?? data.payload?.is_clean);
+                tray.material.color.setHex(trayIsClean ? 0x22c55e : 0xf59e0b);
+                placeZone.material.color.setHex(trayIsClean ? 0x22c55e : 0x86efac);
 
                 const goalPose = (trayAttached || stateCode === 'RELEASING_LOAD')
                     ? (data.place_pose || {})
@@ -1284,7 +1296,13 @@ function connectWebSocket() {
                     task: { ...(latest.task || {}), ...(data.task || {}) },
                     safety: { ...(latest.safety || {}), ...(data.safety || {}) },
                     payload: { ...(latest.payload || {}), ...(data.payload || {}) },
-                    washer: { ...(latest.washer || {}), ...(data.washer || {}) }
+                    washer: { ...(latest.washer || {}), ...(data.washer || {}) },
+                    tray_body: {
+                        ...(latest.tray_body || {}),
+                        ...(data.tray_body || {}),
+                        dims_m: { ...((latest.tray_body && latest.tray_body.dims_m) || {}), ...((data.tray_body && data.tray_body.dims_m) || {}) },
+                        pose: { ...((latest.tray_body && latest.tray_body.pose) || {}), ...((data.tray_body && data.tray_body.pose) || {}) }
+                    }
                 };
             } catch (e) {
                 console.error('Failed to parse message:', e);

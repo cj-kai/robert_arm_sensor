@@ -12,12 +12,12 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from .config_store import ConfigStore
-from .fsm import GraspFSM
+from .side_pick_runtime import SidePickExecutionFSM
 from .models import LogLevel
 from .ws_manager import ws_manager
 
 
-fsm = GraspFSM()
+fsm = SidePickExecutionFSM()
 config_store = ConfigStore()
 
 
@@ -45,8 +45,14 @@ app = FastAPI(
 
 
 async def broadcast_state():
+    last_ts = time.time()
     while True:
         try:
+            now = time.time()
+            dt = now - last_ts
+            last_ts = now
+            if hasattr(fsm, "update"):
+                fsm.update(dt)
             await ws_manager.broadcast(fsm.state.to_dict())
             await asyncio.sleep(0.1)
         except asyncio.CancelledError:
