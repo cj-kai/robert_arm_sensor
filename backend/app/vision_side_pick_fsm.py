@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Callable, Optional
 
+from .ik_solver import CRX20IkPySolver, IKResult, find_default_crx20_urdf_path
 from .simulator import RobotSim, VisionSim, VacuumSim
 
 
@@ -269,6 +270,7 @@ class VisionGuidedSidePickFSM:
         vacuum: Optional[VacuumSim] = None,
         layout: Optional[WorkcellLayout] = None,
         cfg: Optional[SidePickConfig] = None,
+        ik_solver: Optional[object] = None,
     ):
         self.robot = robot or RobotSim()
         self.vision = vision or VisionSim()
@@ -285,11 +287,17 @@ class VisionGuidedSidePickFSM:
         self._traj: Optional[TrajectorySequence] = None
         self._ee_pose = self._pose_from_robot()
         self._side_pick_quat = euler_deg_to_quat(*self.HORIZONTAL_SIDE_PICK_EULER_DEG)
+        self._joint_angles_rad = [float(v) for v in self.robot.get_joint_angles_rad()]
+        self._ik_solver = ik_solver
+        self._ik_init_error = ""
+        self._ik_warned = False
         self._current_target: Optional[Vec3] = None
         self._active_tray: Optional[SimTray] = None
         self._washer_tray: Optional[SimTray] = None
         self._washer_elapsed_s = 0.0
         self._dirty_trays = self._make_initial_dirty_trays()
+        self._init_ik_solver()
+        self._update_joint_solution_from_ee_pose()
 
     # ----- public loop -----
 
@@ -356,6 +364,9 @@ class VisionGuidedSidePickFSM:
             },
             "last_error": self.last_error,
         }
+
+    def get_joint_angles_rad(self) -> list[float]:
+        return [round(float(v), 4) for v in self._joint_angles_rad]
 
     # ----- state handlers -----
 
@@ -681,6 +692,49 @@ class VisionGuidedSidePickFSM:
         self.robot.roll = roll
         self.robot.pitch = pitch
         self.robot.yaw = yaw
+        self._update_joint_solution_from_ee_pose()
+
+    def _init_ik_solver(self) -> None:
+        if self._ik_solver is not None:
+            return
+        try:
+            self._ik_solver = CRX20IkPySolver(find_default_crx20_urdf_path())
+        except Exception as exc:
+            self._ik_solver = None
+            self._ik_init_error = str(exc)
+
+    def _update_joint_solution_from_ee_pose(self) -> None:
+        solver = self._ik_solver
+        if solver is None:
+            if self._ik_init_error and not self._ik_warned:
+                print(f"[IK] Disabled, using placeholder joint angles: {self._ik_init_error}")
+                self._ik_warned = True
+            self._joint_angles_rad = [float(v) for v in self.robot.get_joint_angles_rad()]
+            return
+
+        try:
+            res: IKResult = solver.solve_tcp_pose(
+                [self._ee_pose.pos.x, self._ee_pose.pos.y, self._ee_pose.pos.z],
+                [self._ee_pose.quat.x, self._ee_pose.quat.y, self._ee_pose.quat.z, self._ee_pose.quat.w],
+            )
+        except Exception as exc:
+            if not self._ik_warned:
+                print(f"[IK] Solver runtime failure, keeping previous solution: {exc}")
+                self._ik_warned = True
+            return
+
+        if not res.ok or len(res.joints_rad) != 6:
+            if res.error and not self._ik_warned:
+                print(f"[IK] Solver returned invalid solution, keeping previous solution: {res.error}")
+                self._ik_warned = True
+            return
+
+        # Mild smoothing reduces numerical IK jitter while preserving path response.
+        alpha = 0.45
+        self._joint_angles_rad = [
+            (1.0 - alpha) * old + alpha * new
+            for old, new in zip(self._joint_angles_rad, res.joints_rad)
+        ]
 
     def _make_pose(self, pos: Vec3, quat: Quat) -> Pose:
         return Pose(pos.copy(), quat)

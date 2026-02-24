@@ -177,7 +177,10 @@ class SidePickExecutionFSM:
         self.state.success_count = self.core.total_cycles
 
         self.state.robot_pose = dict(snap["robot_pose"])
-        self.state.joint_angles_rad = self.core.robot.get_joint_angles_rad()
+        try:
+            self.state.joint_angles_rad = self.core.get_joint_angles_rad()
+        except Exception:
+            self.state.joint_angles_rad = self.core.robot.get_joint_angles_rad()
 
         vis = self.core.vision.detect()
         self.state.vision = {
@@ -384,4 +387,3 @@ class SidePickExecutionFSM:
             z = self.core.layout.clean_rack_place_base.z + self.core.clean_stack_count * self.core.cfg.tray_thickness_m
             return (self.core.layout.clean_rack_place_base.x, self.core.layout.clean_rack_place_base.y, z)
         return (self.core.layout.washer_infeed.x, self.core.layout.washer_infeed.y, self.core.layout.washer_infeed.z)
-
