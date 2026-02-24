@@ -195,13 +195,32 @@ class GraspFSM:
             self._task = None
 
         self.state.state = StateCode.IDLE
+        self.vision_adapter.stop()
+        self.vision.reset()
         self.vacuum.turn_off()
         self.robot.stop()
         self.conveyor.stop()
         self._washer_busy = False
+        self._washer_done = False
+        self._flow_stage = "DIRTY_TO_WASHER"
+        self._current_target = None
+        self._current_offset_idx = 0
         self._goal_pose = None
+        self.state.vacuum_ok = False
+        self.state.vacuum_kpa = None
+        self.state.grip = {"vacuum_on": False, "sealed": False}
+        self.state.vision = {
+            "detected": False,
+            "confidence": 0.0,
+            "tag_id": None,
+            "source": "wrist_usb",
+            "camera_ok": False,
+            "pose_valid": False,
+        }
         self.state.task["paused"] = False
         self.state.task["phase"] = "WAITING"
+        self._task_phase_override = "WAITING"
+        self._update_state_for_ws()
         self.state.add_log(LogLevel.INFO, "FSM_STOPPED", "FSM stopped, returned to IDLE")
 
     async def reset(self):

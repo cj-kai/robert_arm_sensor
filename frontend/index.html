@@ -218,6 +218,7 @@
     <script type="module">
 const THREE_MODULE_URL = "/static/vendor/three/three.module.js";
 const ORBIT_CONTROLS_URL = "/static/vendor/three/OrbitControls.js";
+const URDF_LOADER_URL = "/static/vendor/three/URDFLoader.js";
 
 // ============ State ============
 let ws = null;
@@ -280,11 +281,14 @@ const WORKCELL_LAYOUT = {
     cleanRack: { x_m: -0.35, y_m: -0.18, z_m: 0.0 },
     washerLoad: { x_m: 0.22, y_m: 0.14, z_m: 0.05 },
     washerReturn: { x_m: 0.24, y_m: -0.12, z_m: 0.05 },
-    washerBody: { center_x_m: 0.58, center_y_m: 0.02, size_x_m: 0.95, size_y_m: 0.52, size_h_m: 0.42 },
+    washerBody: { center_x_m: 0.72, center_y_m: 0.02, size_x_m: 0.62, size_y_m: 0.34, size_h_m: 0.34 },
+    conveyorUpper: { center_x_m: 0.44, center_y_m: 0.14, size_x_m: 0.58, size_y_m: 0.10, size_h_m: 0.05 },
+    conveyorLower: { center_x_m: 0.44, center_y_m: -0.12, size_x_m: 0.58, size_y_m: 0.10, size_h_m: 0.05 },
+    returnLoop: { center_x_m: 0.73, center_y_m: 0.01, radius_m: 0.13, tube_m: 0.025 },
     returnChute: { center_x_m: 0.42, center_y_m: -0.18, size_x_m: 0.55, size_y_m: 0.14, size_h_m: 0.08 }
 };
-
-const TRAY_BASE_DIMS = { x_m: 0.30, y_m: 0.22, z_m: 0.03 };
+const TRAY_BASE_DIMS = { x_m: 0.30, y_m: 0.22, z_m: 0.03 }; // x: tray width, y: tray visible face height, z: thickness (side-suction view)
+const URDF_JOINT_NAMES = ['shoulder_pan_joint', 'shoulder_lift_joint', 'elbow_joint', 'wrist_1_joint', 'wrist_2_joint', 'wrist_3_joint'];
 
 // ============ Three.js Setup (Guarded) ============
 const container = document.getElementById('workspace3d');
@@ -366,7 +370,7 @@ function init3DFallback(reason, error) {
     threeApp = createNoopThreeApp();
 }
 
-function buildThreeApp(THREE, OrbitControls) {
+async function buildThreeApp(THREE, OrbitControls, URDFLoaderClass = null) {
     if (!container) {
         throw new Error('Missing #workspace3d container');
     }
@@ -403,9 +407,12 @@ function buildThreeApp(THREE, OrbitControls) {
     grid.position.y = 0;
     scene.add(grid);
 
-    // ============ Build CRX-like Arm ============
-    const root = new THREE.Group();
-    scene.add(root);
+    // ============ Robot / Gripper ============
+    const fallbackRoot = new THREE.Group();
+    scene.add(fallbackRoot);
+    let urdfRobot = null;
+    let urdfLoadFailed = false;
+    const urdfJoints = new Map();
 
     const baseMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.6, metalness: 0.05 });
     const accentMat = new THREE.MeshStandardMaterial({ color: 0x3bd26f, roughness: 0.5, metalness: 0.05 });
@@ -413,11 +420,11 @@ function buildThreeApp(THREE, OrbitControls) {
 
     const base = new THREE.Mesh(new THREE.CylinderGeometry(0.10, 0.12, 0.05, 32), darkMat);
     base.position.set(0, 0.025, 0);
-    root.add(base);
+    fallbackRoot.add(base);
 
     const pedestal = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.09, 0.20, 32), baseMat);
     pedestal.position.set(0, 0.14, 0);
-    root.add(pedestal);
+    fallbackRoot.add(pedestal);
 
     const jointSphere = (r = 0.03, mat = accentMat) => new THREE.Mesh(new THREE.SphereGeometry(r, 24, 16), mat);
     const link = (len = 0.22, r = 0.022, mat = baseMat) => {
@@ -429,33 +436,36 @@ function buildThreeApp(THREE, OrbitControls) {
 
     const j1 = jointSphere(0.035);
     j1.position.set(0, 0.25, 0);
-    root.add(j1);
+    fallbackRoot.add(j1);
 
     const l1 = link(0.25, 0.024, baseMat);
     l1.position.copy(j1.position);
-    root.add(l1);
+    fallbackRoot.add(l1);
 
     const j2 = jointSphere(0.032);
     j2.position.set(0, 0.50, 0);
-    root.add(j2);
+    fallbackRoot.add(j2);
 
     const l2 = link(0.22, 0.022, baseMat);
     l2.position.copy(j2.position);
-    root.add(l2);
+    fallbackRoot.add(l2);
 
     const j3 = jointSphere(0.028);
     j3.position.set(0, 0.72, 0);
-    root.add(j3);
+    fallbackRoot.add(j3);
 
     const l3 = link(0.18, 0.020, baseMat);
     l3.position.copy(j3.position);
-    root.add(l3);
+    fallbackRoot.add(l3);
 
+    const eeAnchor = new THREE.Group();
+    scene.add(eeAnchor);
     const ee = new THREE.Group();
-    scene.add(ee);
+    eeAnchor.add(ee);
 
+    // Side-suction head: cups point laterally (toward tray side), not downward.
     const eeBody = new THREE.Mesh(
-        new THREE.BoxGeometry(0.12, 0.06, 0.10),
+        new THREE.BoxGeometry(0.04, 0.10, 0.12),
         new THREE.MeshStandardMaterial({ color: 0x6b7280, roughness: 0.5, metalness: 0.2 })
     );
     ee.add(eeBody);
@@ -464,32 +474,51 @@ function buildThreeApp(THREE, OrbitControls) {
     const cups = [];
     for (let i = 0; i < 10; i++) {
         const cup = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.012, 0.01, 18), cupMat.clone());
-        cup.rotation.x = Math.PI / 2;
-        cup.position.set(-0.045 + i * 0.01, -0.035, 0);
+        cup.rotation.z = Math.PI / 2;
+        cup.position.set(0.03, -0.04 + i * 0.008, 0);
         ee.add(cup);
         cups.push(cup);
     }
 
     const eeRing = new THREE.Mesh(new THREE.TorusGeometry(0.03, 0.004, 16, 32), accentMat);
     eeRing.rotation.x = Math.PI / 2;
-    eeRing.position.set(0, 0.03, 0);
+    eeRing.position.set(0.01, 0, 0);
+    eeRing.rotation.y = Math.PI / 2;
     ee.add(eeRing);
 
     const tcp = new THREE.Mesh(
         new THREE.SphereGeometry(0.008, 16, 12),
         new THREE.MeshStandardMaterial({ color: 0xffcc00 })
     );
-    tcp.position.set(0, -0.045, 0);
+    tcp.position.set(0.045, 0, 0);
     ee.add(tcp);
+
+    const cameraPod = new THREE.Mesh(
+        new THREE.BoxGeometry(0.028, 0.022, 0.022),
+        new THREE.MeshStandardMaterial({ color: 0x38bdf8, roughness: 0.35, metalness: 0.2 })
+    );
+    cameraPod.position.set(-0.02, 0.03, 0.03);
+    ee.add(cameraPod);
+
+    const cameraLens = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.006, 0.006, 0.01, 16),
+        new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.2, metalness: 0.6 })
+    );
+    cameraLens.rotation.z = Math.PI / 2;
+    cameraLens.position.set(-0.005, 0.03, 0.03);
+    ee.add(cameraLens);
 
     const armLineMat = new THREE.LineBasicMaterial({ color: 0x93c5fd });
     const armLineGeo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]);
     const armLine = new THREE.Line(armLineGeo, armLineMat);
     scene.add(armLine);
 
-    const trayMat = new THREE.MeshStandardMaterial({ color: 0xf59e0b, transparent: true, opacity: 0.45, roughness: 0.6 });
-    const tray = new THREE.Mesh(new THREE.BoxGeometry(TRAY_BASE_DIMS.x_m, Math.max(0.01, TRAY_BASE_DIMS.z_m), TRAY_BASE_DIMS.y_m), trayMat);
-    tray.position.set(WORKCELL_LAYOUT.dirtyRack.x_m, 0.01, WORKCELL_LAYOUT.dirtyRack.y_m);
+    const trayMat = new THREE.MeshStandardMaterial({ color: 0xf59e0b, transparent: true, opacity: 0.40, roughness: 0.6 });
+    const tray = new THREE.Mesh(
+        new THREE.BoxGeometry(TRAY_BASE_DIMS.x_m, TRAY_BASE_DIMS.y_m, Math.max(0.01, TRAY_BASE_DIMS.z_m)),
+        trayMat
+    );
+    tray.position.set(WORKCELL_LAYOUT.dirtyRack.x_m, TRAY_BASE_DIMS.y_m / 2, WORKCELL_LAYOUT.dirtyRack.y_m);
     scene.add(tray);
 
     const placeZone = new THREE.Mesh(
@@ -503,7 +532,7 @@ function buildThreeApp(THREE, OrbitControls) {
         new THREE.SphereGeometry(0.015, 18, 12),
         new THREE.MeshStandardMaterial({ color: 0xff4d4d })
     );
-    marker.position.copy(tray.position).add(new THREE.Vector3(0, 0.06, 0));
+    marker.position.copy(tray.position).add(new THREE.Vector3(0.05, 0, 0));
     scene.add(marker);
 
     // Workcell layout helpers (dirty/clean racks, washer body, return chute)
@@ -511,9 +540,27 @@ function buildThreeApp(THREE, OrbitControls) {
     const rackMatClean = new THREE.MeshStandardMaterial({ color: 0x22c55e, roughness: 0.7, metalness: 0.05, transparent: true, opacity: 0.25 });
     const washerMat = new THREE.MeshStandardMaterial({ color: 0x94a3b8, roughness: 0.55, metalness: 0.2 });
     const chuteMat = new THREE.MeshStandardMaterial({ color: 0xfb923c, roughness: 0.6, metalness: 0.1, transparent: true, opacity: 0.35 });
+    const conveyorMat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.85, metalness: 0.05 });
+    const conveyorEdgeMat = new THREE.MeshStandardMaterial({ color: 0x64748b, roughness: 0.7, metalness: 0.15 });
 
     const dirtyRack = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.40, 0.22), rackMatDirty);
     const cleanRack = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.40, 0.22), rackMatClean);
+    const conveyorUpper = new THREE.Mesh(
+        new THREE.BoxGeometry(WORKCELL_LAYOUT.conveyorUpper.size_x_m, WORKCELL_LAYOUT.conveyorUpper.size_h_m, WORKCELL_LAYOUT.conveyorUpper.size_y_m),
+        conveyorMat
+    );
+    const conveyorLower = new THREE.Mesh(
+        new THREE.BoxGeometry(WORKCELL_LAYOUT.conveyorLower.size_x_m, WORKCELL_LAYOUT.conveyorLower.size_h_m, WORKCELL_LAYOUT.conveyorLower.size_y_m),
+        conveyorMat
+    );
+    const conveyorUpperEdge = new THREE.Mesh(
+        new THREE.BoxGeometry(WORKCELL_LAYOUT.conveyorUpper.size_x_m, 0.01, WORKCELL_LAYOUT.conveyorUpper.size_y_m + 0.03),
+        conveyorEdgeMat
+    );
+    const conveyorLowerEdge = new THREE.Mesh(
+        new THREE.BoxGeometry(WORKCELL_LAYOUT.conveyorLower.size_x_m, 0.01, WORKCELL_LAYOUT.conveyorLower.size_y_m + 0.03),
+        conveyorEdgeMat
+    );
     const washerBody = new THREE.Mesh(
         new THREE.BoxGeometry(WORKCELL_LAYOUT.washerBody.size_x_m, WORKCELL_LAYOUT.washerBody.size_h_m, WORKCELL_LAYOUT.washerBody.size_y_m),
         washerMat
@@ -530,13 +577,43 @@ function buildThreeApp(THREE, OrbitControls) {
         new THREE.BoxGeometry(0.12, 0.012, 0.12),
         new THREE.MeshStandardMaterial({ color: 0xf97316, transparent: true, opacity: 0.35 })
     );
-    scene.add(dirtyRack, cleanRack, washerBody, returnChute, washerLoadMarker, washerReturnMarker);
+    const returnLoop = new THREE.Mesh(
+        new THREE.TorusGeometry(WORKCELL_LAYOUT.returnLoop.radius_m, WORKCELL_LAYOUT.returnLoop.tube_m, 14, 48, Math.PI),
+        new THREE.MeshStandardMaterial({ color: 0xfb923c, roughness: 0.7, metalness: 0.05 })
+    );
+    returnLoop.rotation.x = Math.PI / 2;
+    scene.add(
+        dirtyRack, cleanRack,
+        conveyorUpper, conveyorLower, conveyorUpperEdge, conveyorLowerEdge,
+        washerBody, returnChute, returnLoop,
+        washerLoadMarker, washerReturnMarker
+    );
 
     const placeAtPose = (mesh, pose, yOffset = 0) => {
         mesh.position.set(asNumber(pose.x_m, 0), yOffset, asNumber(pose.y_m, 0));
     };
     placeAtPose(dirtyRack, WORKCELL_LAYOUT.dirtyRack, 0.20);
     placeAtPose(cleanRack, WORKCELL_LAYOUT.cleanRack, 0.20);
+    conveyorUpper.position.set(
+        WORKCELL_LAYOUT.conveyorUpper.center_x_m,
+        WORKCELL_LAYOUT.conveyorUpper.size_h_m / 2,
+        WORKCELL_LAYOUT.conveyorUpper.center_y_m
+    );
+    conveyorLower.position.set(
+        WORKCELL_LAYOUT.conveyorLower.center_x_m,
+        WORKCELL_LAYOUT.conveyorLower.size_h_m / 2,
+        WORKCELL_LAYOUT.conveyorLower.center_y_m
+    );
+    conveyorUpperEdge.position.set(
+        WORKCELL_LAYOUT.conveyorUpper.center_x_m,
+        WORKCELL_LAYOUT.conveyorUpper.size_h_m + 0.01,
+        WORKCELL_LAYOUT.conveyorUpper.center_y_m
+    );
+    conveyorLowerEdge.position.set(
+        WORKCELL_LAYOUT.conveyorLower.center_x_m,
+        WORKCELL_LAYOUT.conveyorLower.size_h_m + 0.01,
+        WORKCELL_LAYOUT.conveyorLower.center_y_m
+    );
     washerBody.position.set(
         WORKCELL_LAYOUT.washerBody.center_x_m,
         WORKCELL_LAYOUT.washerBody.size_h_m / 2,
@@ -549,6 +626,7 @@ function buildThreeApp(THREE, OrbitControls) {
     );
     placeAtPose(washerLoadMarker, WORKCELL_LAYOUT.washerLoad, 0.006);
     placeAtPose(washerReturnMarker, WORKCELL_LAYOUT.washerReturn, 0.006);
+    returnLoop.position.set(WORKCELL_LAYOUT.returnLoop.center_x_m, 0.04, WORKCELL_LAYOUT.returnLoop.center_y_m);
 
     const mapPose = (pose) => ({
         x: asNumber(pose.x_m, 0),
@@ -570,6 +648,39 @@ function buildThreeApp(THREE, OrbitControls) {
         try { renderer.domElement.style.opacity = '0.2'; } catch (_) {}
     };
 
+    if (URDFLoaderClass) {
+        try {
+            const loader = new URDFLoaderClass();
+            const loaded = await loader.loadAsync('/static/assets/robot/crx20ial/robot.urdf');
+            urdfRobot = loaded;
+            urdfRobot.name = 'crx20ial';
+            urdfRobot.position.set(0, 0, 0);
+            urdfRobot.rotation.set(0, 0, 0);
+            scene.add(urdfRobot);
+            fallbackRoot.visible = false;
+
+            for (const name of URDF_JOINT_NAMES) {
+                if (urdfRobot.joints?.[name]) urdfJoints.set(name, urdfRobot.joints[name]);
+            }
+
+            const eeLink = urdfRobot.links?.tool0 || urdfRobot.links?.ee_link || urdfRobot.links?.link_6 || urdfRobot;
+            scene.remove(eeAnchor);
+            eeAnchor.position.set(0, 0, 0);
+            eeAnchor.rotation.set(0, 0, 0);
+            // Side-suction: mount gripper on tool and rotate so cups point toward tray side.
+            ee.position.set(0.055, 0.0, 0.0);
+            ee.rotation.set(0, Math.PI / 2, 0);
+            eeLink.add(eeAnchor);
+        } catch (err) {
+            urdfLoadFailed = true;
+            console.warn('URDF load failed, using fallback arm:', err);
+            fallbackRoot.visible = true;
+            ee.position.set(0, 0, 0);
+            ee.rotation.set(0, 0, 0);
+            set3DNotice('URDF load failed', 'Using fallback arm view. Workcell and controls remain functional.', 'warn');
+        }
+    }
+
     return {
         ready: true,
         updateScene(data) {
@@ -577,12 +688,20 @@ function buildThreeApp(THREE, OrbitControls) {
             try {
                 const rp = data.robot_pose || {};
                 const mapped = mapPose(rp);
-                ee.position.set(mapped.x, mapped.y + 0.045, mapped.z);
-                ee.rotation.set(
+                eeAnchor.position.set(mapped.x, mapped.y + 0.045, mapped.z);
+                eeAnchor.rotation.set(
                     deg2rad(rp.roll_deg),
                     deg2rad(rp.yaw_deg),
                     deg2rad(rp.pitch_deg)
                 );
+                if (urdfRobot && Array.isArray(data.joint_angles_rad) && data.joint_angles_rad.length >= 6) {
+                    for (let i = 0; i < URDF_JOINT_NAMES.length; i++) {
+                        const joint = urdfJoints.get(URDF_JOINT_NAMES[i]);
+                        if (joint && typeof joint.setJointValue === 'function') {
+                            joint.setJointValue(asNumber(data.joint_angles_rad[i], 0));
+                        }
+                    }
+                }
 
                 const tp = data.target_pose || {};
                 tray.position.set(asNumber(tp.x_m, WORKCELL_LAYOUT.dirtyRack.x_m), 0.01, asNumber(tp.y_m, WORKCELL_LAYOUT.dirtyRack.y_m));
@@ -595,9 +714,10 @@ function buildThreeApp(THREE, OrbitControls) {
                 const dx = Math.max(0.12, asNumber(dims.x_m, TRAY_BASE_DIMS.x_m));
                 const dy = Math.max(0.08, asNumber(dims.y_m, TRAY_BASE_DIMS.y_m));
                 const dz = Math.max(0.012, asNumber(dims.z_m, TRAY_BASE_DIMS.z_m));
-                tray.scale.set(dx / TRAY_BASE_DIMS.x_m, dz / TRAY_BASE_DIMS.z_m, dy / TRAY_BASE_DIMS.y_m);
-                tray.position.y = dz / 2;
-                marker.position.y = dz + 0.05;
+                tray.scale.set(dx / TRAY_BASE_DIMS.x_m, dy / TRAY_BASE_DIMS.y_m, dz / TRAY_BASE_DIMS.z_m);
+                tray.position.y = dy / 2;
+                const suctionOffsetX = (dz / 2 + 0.03) * (tray.position.x < 0 ? 1 : -1);
+                marker.position.set(tray.position.x + suctionOffsetX, Math.max(0.05, dy * 0.5), tray.position.z);
                 tray.material.color.setHex(data.payload?.is_clean ? 0x22c55e : 0xf59e0b);
                 placeZone.material.color.setHex(data.payload?.is_clean ? 0x22c55e : 0x86efac);
 
@@ -612,9 +732,14 @@ function buildThreeApp(THREE, OrbitControls) {
                     c.material.color.setHex(sealed ? 0x22c55e : (vac ? 0xf59e0b : 0x0f172a));
                 }
 
-                const from = new THREE.Vector3(0, 0.72, 0);
-                const to = new THREE.Vector3().copy(ee.position);
-                armLine.geometry.setFromPoints([from, to]);
+                if (!urdfRobot || urdfLoadFailed) {
+                    const from = new THREE.Vector3(0, 0.72, 0);
+                    const to = new THREE.Vector3().copy(eeAnchor.position);
+                    armLine.visible = true;
+                    armLine.geometry.setFromPoints([from, to]);
+                } else {
+                    armLine.visible = false;
+                }
             } catch (err) {
                 disableOnRuntimeError(err);
             }
@@ -649,12 +774,14 @@ async function initThreeSubsystem() {
     try {
         const THREE = await import(THREE_MODULE_URL);
         const controlsModule = await import(ORBIT_CONTROLS_URL);
+        const urdfModule = await import(URDF_LOADER_URL);
         const OrbitControls = controlsModule.OrbitControls;
+        const URDFLoader = urdfModule.default;
         if (!OrbitControls) {
             throw new Error('OrbitControls export not found');
         }
 
-        threeApp = buildThreeApp(THREE, OrbitControls);
+        threeApp = await buildThreeApp(THREE, OrbitControls, URDFLoader);
         clear3DNotice();
     } catch (err) {
         console.error('3D initialization failed:', err);
