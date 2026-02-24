@@ -152,7 +152,7 @@ class RobotSim:
         # 当前位姿（世界坐标，单位：米）
         self.x: float = 0.0
         self.y: float = 0.0
-        self.z: float = 0.3  # 初始高度 300mm
+        self.z: float = 1.0  # phase-1 tray washer layout safe standby height
 
         # 姿态（欧拉角，单位：度）
         self.roll: float = 0.0
@@ -160,13 +160,13 @@ class RobotSim:
         self.yaw: float = 0.0
 
         # 安全高度
-        self.safe_z: float = 0.3
+        self.safe_z: float = 1.0
 
         # 动作日志
         self.action_log: List[str] = []
 
         # 移动速度（米/秒）
-        self.default_speed: float = 0.5
+        self.default_speed: float = 0.35
 
     def step(self, dt: float, goal_pose: Optional[dict], speed_mps: float = None):
         """平滑移动到目标位姿（每 tick 调用一次）"""

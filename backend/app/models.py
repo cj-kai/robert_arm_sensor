@@ -63,15 +63,15 @@ class LogEntry:
 
 
 def _default_robot_pose() -> dict:
-    return {"x_m": 0.0, "y_m": 0.0, "z_m": 0.3, "roll_deg": 0.0, "pitch_deg": 0.0, "yaw_deg": 0.0}
+    return {"x_m": 0.0, "y_m": 0.0, "z_m": 1.0, "roll_deg": 0.0, "pitch_deg": 0.0, "yaw_deg": 0.0}
 
 
 def _default_target_pose() -> dict:
-    return {"x_m": -0.35, "y_m": 0.18, "z_m": 0.0}
+    return {"x_m": -1.50, "y_m": 1.20, "z_m": 0.80}
 
 
 def _default_place_pose() -> dict:
-    return {"x_m": 0.22, "y_m": 0.14, "z_m": 0.05}
+    return {"x_m": 1.20, "y_m": 1.00, "z_m": 0.50}
 
 
 def _default_vision() -> dict:

@@ -1,5 +1,6 @@
 import * as THREE from './three.module.js';
 import { URDFRobot, URDFJoint, URDFLink, URDFCollider, URDFVisual, URDFMimicJoint } from './URDFClasses.js';
+import { ColladaLoader } from './ColladaLoader.js';
 
 /*
 Reference coordinate frames for THREE.js and ROS.
@@ -63,6 +64,7 @@ class URDFLoader {
         this.packages = '';
         this.workingPath = '';
         this.fetchOptions = {};
+        this._colladaLoader = null;
 
     }
 
@@ -636,8 +638,23 @@ class URDFLoader {
             done(new THREE.Group());
 
         } else if (/\.dae$/i.test(path)) {
-            console.warn(`URDFLoader: DAE mesh loading disabled in bundled mode: ${ path }`);
-            done(new THREE.Group());
+            try {
+                if (!this._colladaLoader) {
+                    this._colladaLoader = new ColladaLoader(manager);
+                }
+                this._colladaLoader.load(
+                    path,
+                    result => done(result?.scene || new THREE.Group()),
+                    undefined,
+                    err => {
+                        console.warn(`URDFLoader: Failed to load DAE mesh: ${ path }`, err);
+                        done(new THREE.Group());
+                    }
+                );
+            } catch (err) {
+                console.warn(`URDFLoader: DAE loader init failed: ${ path }`, err);
+                done(new THREE.Group());
+            }
 
         } else {
 

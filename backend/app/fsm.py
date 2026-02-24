@@ -39,13 +39,13 @@ class GraspFSM:
         self._goal_pose: Optional[dict] = None
 
         # 鏀剧疆浣嶇疆锛堜笘鐣屽潗鏍囷紝鍗曚綅锛氱背锟?
-        self._place_position = {"x_m": -0.25, "y_m": 0.25, "z_m": 0.05}
+        self._place_position = {"x_m": 1.20, "y_m": 1.00, "z_m": 0.50}
 
         # 瀹夊叏浣嶅Э
-        self._safe_pose = {"x_m": 0.0, "y_m": 0.0, "z_m": 0.3}
+        self._safe_pose = {"x_m": 0.0, "y_m": 0.0, "z_m": 1.0}
 
         # 鎺ヨЕ楂樺害
-        self._contact_z = 0.02  # 20mm
+        self._contact_z = 0.50  # default mid-height contact in phase-1 tray washer layout
 
         # 鐘舵€佽鏃跺櫒
         self._state_timer: float = 0.0
@@ -80,6 +80,7 @@ class GraspFSM:
         self._washer_started_ts = 0.0
         self._washer_busy = False
         self._washer_done = False
+        self.robot.safe_z = self._safe_pose["z_m"]
         self._prepare_cycle_targets(reset_payload=False)
 
     def _make_payload(self, key: str, spec: dict) -> dict:
@@ -100,6 +101,11 @@ class GraspFSM:
 
     def _set_vision_target(self, pose: dict) -> None:
         self.vision.default_target = TargetPose(x=pose["x_m"], y=pose["y_m"], z=pose.get("z_m", 0.0))
+
+    def _target_contact_z(self) -> float:
+        if self._current_target is not None:
+            return float(self._current_target.z)
+        return float(self._contact_z)
 
     def _prepare_cycle_targets(self, reset_payload: bool = True) -> None:
         if reset_payload:
@@ -218,8 +224,8 @@ class GraspFSM:
             "pose_valid": False,
         }
         self.state.task["paused"] = False
-        self.state.task["phase"] = "WAITING"
-        self._task_phase_override = "WAITING"
+        self.state.task["phase"] = "STOPPED"
+        self._task_phase_override = "STOPPED"
         self._update_state_for_ws()
         self.state.add_log(LogLevel.INFO, "FSM_STOPPED", "FSM stopped, returned to IDLE")
 
@@ -240,6 +246,10 @@ class GraspFSM:
         # 閲嶇疆妯℃嫙锟?
         self.vacuum.reset_faults()
         self.robot = RobotSim()
+        self.robot.safe_z = self._safe_pose["z_m"]
+        self.robot.x = self._safe_pose["x_m"]
+        self.robot.y = self._safe_pose["y_m"]
+        self.robot.z = self._safe_pose["z_m"]
         self.grip = GripSim()
         self.vision.reset()
         self.conveyor.stop()
@@ -254,7 +264,7 @@ class GraspFSM:
         self._prepare_cycle_targets(reset_payload=False)
 
         # 閲嶇疆 SystemState 锟?3D 瀛楁
-        self.state.robot_pose = {"x_m": 0.0, "y_m": 0.0, "z_m": 0.3, "roll_deg": 0.0, "pitch_deg": 0.0, "yaw_deg": 0.0}
+        self.state.robot_pose = {"x_m": 0.0, "y_m": 0.0, "z_m": self._safe_pose["z_m"], "roll_deg": 0.0, "pitch_deg": 0.0, "yaw_deg": 0.0}
         self.state.target_pose = self._dirty_pick.copy()
         self.state.place_pose = self._place_position.copy()
         self.state.conveyor = self.conveyor.get_status()
@@ -388,7 +398,7 @@ class GraspFSM:
         if self._goal_pose is None:
             return False
         contact_z = self._goal_pose.get("z_m", 0.3)
-        return abs(self.robot.z - contact_z) < 0.01 and contact_z < 0.1
+        return abs(self.robot.z - contact_z) < 0.01
 
     def _update_state_for_ws(self):
         """doc"""
@@ -547,15 +557,16 @@ class GraspFSM:
         """doc"""
         if self._current_target:
             dx, dy = GRID_OFFSETS[self._current_offset_idx]
+            contact_z = self._target_contact_z()
             self._goal_pose = {
                 "x_m": self._current_target.x + dx,
                 "y_m": self._current_target.y + dy,
-                "z_m": self._contact_z
+                "z_m": contact_z
             }
 
             if self.robot.is_at_goal(self._goal_pose):
                 self.state.add_log(LogLevel.INFO, "DESCENT_COMPLETE",
-                                   f"Descended to contact at z={self._contact_z:.3f}")
+                                   f"Descended to contact at z={contact_z:.3f}")
                 self.state.state = StateCode.PRE_SUCTION_CHECK
                 self._state_timer = 0.0
 
@@ -586,10 +597,11 @@ class GraspFSM:
         """doc"""
         if self._current_target:
             dx, dy = GRID_OFFSETS[self._current_offset_idx]
+            contact_z = self._target_contact_z()
             self._goal_pose = {
                 "x_m": self._current_target.x + dx,
                 "y_m": self._current_target.y + dy,
-                "z_m": self._contact_z + 0.05  # 鎶捣 50mm
+                "z_m": contact_z + 0.12
             }
 
             if self.robot.is_at_goal(self._goal_pose):
@@ -607,10 +619,12 @@ class GraspFSM:
     async def _handle_transport_monitoring(self, dt: float):
         """doc"""
         # 鐩爣锛氭斁缃偣涓婃柟
+        source_z = self._target_contact_z()
+        transport_z = max(source_z, float(self._place_position.get("z_m", 0.0))) + 0.20
         self._goal_pose = {
             "x_m": self._place_position["x_m"],
             "y_m": self._place_position["y_m"],
-            "z_m": 0.15  # 杩愯緭楂樺害
+            "z_m": transport_z
         }
 
         # 妫€鏌ユ槸鍚︽帀锟?

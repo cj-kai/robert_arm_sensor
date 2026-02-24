@@ -56,9 +56,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "search_dwell_s": 0.25,
         "max_search_rounds": 2,
         "search_points": [
-            {"x_m": -0.35, "y_m": 0.18, "z_m": 0.30},
-            {"x_m": -0.33, "y_m": 0.16, "z_m": 0.30},
-            {"x_m": -0.37, "y_m": 0.20, "z_m": 0.30},
+            {"x_m": -1.50, "y_m": 1.20, "z_m": 0.70},
+            {"x_m": -1.44, "y_m": 1.12, "z_m": 0.70},
+            {"x_m": -1.56, "y_m": 1.28, "z_m": 0.70},
         ],
     },
     "conveyor": {
@@ -73,12 +73,12 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "mode": "simulated",
     },
     "stations": {
-        "rack_dirty_pick": {"x_m": -0.35, "y_m": 0.18, "z_m": 0.0},
-        "rack_clean_place": {"x_m": -0.35, "y_m": -0.18, "z_m": 0.0},
-        "washer_load": {"x_m": 0.22, "y_m": 0.14, "z_m": 0.05},
-        "washer_return_pick": {"x_m": 0.24, "y_m": -0.12, "z_m": 0.05},
-        "conveyor_place": {"x_m": 0.22, "y_m": 0.14, "z_m": 0.05},
-        "conveyor_pick": {"x_m": 0.24, "y_m": -0.12, "z_m": 0.05},
+        "rack_dirty_pick": {"x_m": -1.50, "y_m": 1.20, "z_m": 0.80},
+        "rack_clean_place": {"x_m": -1.50, "y_m": -1.20, "z_m": 0.80},
+        "washer_load": {"x_m": 1.20, "y_m": 1.00, "z_m": 0.50},
+        "washer_return_pick": {"x_m": 1.20, "y_m": -1.00, "z_m": 0.50},
+        "conveyor_place": {"x_m": 1.20, "y_m": 1.00, "z_m": 0.50},
+        "conveyor_pick": {"x_m": 1.20, "y_m": -1.00, "z_m": 0.50},
     },
 }
 
