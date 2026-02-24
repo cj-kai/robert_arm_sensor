@@ -566,12 +566,40 @@ async function buildThreeApp(THREE, OrbitControls, URDFLoaderClass = null) {
         new THREE.LineBasicMaterial({ color: 0xf59e0b, transparent: true, opacity: 0.45 })
     );
     scene.add(trailLine);
+    const SHOW_DEBUG_GUIDES = false;
+    goalLine.visible = SHOW_DEBUG_GUIDES;
+    trailLine.visible = SHOW_DEBUG_GUIDES;
+    armLine.visible = false;
     const trayVisualPos = tray.position.clone();
     const carryingStates = new Set(['LIFT_VERIFICATION', 'TRANSPORT_MONITORING', 'MOVING_TO_PLACE']);
     let trayAttached = false;
+    let trayAttachedVisual = false;
     let trayAttachBlend = 0;
     let trayCycleId = '';
     let trayLastFlowStage = 'DIRTY_TO_WASHER';
+    const trayWorldTmp = new THREE.Vector3();
+    const trayColorTarget = new THREE.Color(0xf59e0b);
+
+    const setTrayWorldPosition = (worldPos) => {
+        if (!tray.parent || tray.parent === scene) {
+            tray.position.copy(worldPos);
+            return;
+        }
+        tray.position.copy(tray.parent.worldToLocal(worldPos.clone()));
+    };
+
+    const setTrayVisualAttachment = (attachToTool) => {
+        const shouldAttach = !!attachToTool;
+        if (shouldAttach === trayAttachedVisual) return;
+        scene.updateMatrixWorld(true);
+        ee.updateMatrixWorld(true);
+        if (shouldAttach) {
+            ee.attach(tray); // preserve world transform while parenting to end-effector
+        } else {
+            scene.attach(tray); // preserve world transform while returning to scene root
+        }
+        trayAttachedVisual = shouldAttach;
+    };
 
     const sampleWasherReturnPath = (progress01, trayHeight) => {
         const p = Math.max(0, Math.min(1, asNumber(progress01, 0)));
@@ -899,7 +927,7 @@ async function buildThreeApp(THREE, OrbitControls, URDFLoaderClass = null) {
                     eeAnchor.getWorldPosition(eeWorld);
                 }
                 trailAccum += 1;
-                if (trailAccum >= 2) {
+                if (SHOW_DEBUG_GUIDES && trailAccum >= 2) {
                     trailAccum = 0;
                     const trailPoint = new THREE.Vector3(eeWorld.x, eeWorld.y, eeWorld.z);
                     const last = trailPoints[trailPoints.length - 1];
@@ -1001,19 +1029,28 @@ async function buildThreeApp(THREE, OrbitControls, URDFLoaderClass = null) {
                 const trayFollowAlpha = hasBackendTrayPose ? (trayAttached ? 0.42 : 0.30) : (trayAttached ? 0.28 : (washerBusy ? 0.16 : 0.22));
                 tray.visible = !!(backendTrayBody.visible ?? true);
                 marker.visible = tray.visible;
-                trayVisualPos.lerp(trayGoal, trayFollowAlpha);
-                tray.position.copy(trayVisualPos);
+                setTrayVisualAttachment(tray.visible && trayAttached);
+                if (trayAttachedVisual && trayAttached) {
+                    // While attached, let tray inherit end-effector motion as a true child object.
+                    tray.getWorldPosition(trayWorldTmp);
+                    trayVisualPos.copy(trayWorldTmp);
+                } else {
+                    trayVisualPos.lerp(trayGoal, trayFollowAlpha);
+                    setTrayWorldPosition(trayVisualPos);
+                    tray.getWorldPosition(trayWorldTmp);
+                }
 
-                const suctionOffsetX = (dz / 2 + 0.03) * (tray.position.x < 0 ? 1 : -1);
+                const suctionOffsetX = (dz / 2 + 0.03) * (trayWorldTmp.x < 0 ? 1 : -1);
                 marker.position.set(
-                    tray.position.x + suctionOffsetX,
-                    tray.position.y + Math.max(0.05, dz * 0.6),
-                    tray.position.z
+                    trayWorldTmp.x + suctionOffsetX,
+                    trayWorldTmp.y + Math.max(0.05, dz * 0.6),
+                    trayWorldTmp.z
                 );
                 const isCarrying = trayAttached;
                 marker.visible = tray.visible && !isCarrying && !washerBusy;
-                const trayIsClean = !!(backendTrayBody.is_clean ?? data.payload?.is_clean);
-                tray.material.color.setHex(trayIsClean ? 0x22c55e : 0xf59e0b);
+                const trayIsClean = hasBackendTrayPose ? !!backendTrayBody.is_clean : !!data.payload?.is_clean;
+                trayColorTarget.setHex(trayIsClean ? 0x22c55e : 0xf59e0b);
+                tray.material.color.lerp(trayColorTarget, 0.18);
                 placeZone.material.color.setHex(trayIsClean ? 0x22c55e : 0x86efac);
 
                 const goalPose = (trayAttached || stateCode === 'RELEASING_LOAD')
@@ -1022,10 +1059,12 @@ async function buildThreeApp(THREE, OrbitControls, URDFLoaderClass = null) {
                 const goalMapped = mapPose(goalPose);
                 goalMarker.position.set(goalMapped.x, Math.max(0.02, goalMapped.y), goalMapped.z);
                 goalMarker.material.color.setHex(trayAttached ? 0x22c55e : 0x38bdf8);
-                goalLine.geometry.setFromPoints([
-                    new THREE.Vector3(eeWorld.x, eeWorld.y, eeWorld.z),
-                    new THREE.Vector3(goalMapped.x, Math.max(0.02, goalMapped.y), goalMapped.z)
-                ]);
+                if (SHOW_DEBUG_GUIDES) {
+                    goalLine.geometry.setFromPoints([
+                        new THREE.Vector3(eeWorld.x, eeWorld.y, eeWorld.z),
+                        new THREE.Vector3(goalMapped.x, Math.max(0.02, goalMapped.y), goalMapped.z)
+                    ]);
+                }
 
                 washerBody.material.color.setHex(washerBusy ? 0x60a5fa : 0x94a3b8);
                 washerLoadMarker.material.color.setHex(washerBusy ? 0x1d4ed8 : 0x38bdf8);
@@ -1040,8 +1079,8 @@ async function buildThreeApp(THREE, OrbitControls, URDFLoaderClass = null) {
                 if (!urdfRobot || urdfLoadFailed) {
                     const from = new THREE.Vector3(0, 0.68, 0);
                     const to = new THREE.Vector3().copy(eeAnchor.position);
-                    armLine.visible = true;
-                    armLine.geometry.setFromPoints([from, to]);
+                    armLine.visible = SHOW_DEBUG_GUIDES;
+                    if (SHOW_DEBUG_GUIDES) armLine.geometry.setFromPoints([from, to]);
                 } else {
                     armLine.visible = false;
                 }

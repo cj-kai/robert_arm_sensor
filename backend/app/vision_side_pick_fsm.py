@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+import random
 import time
 from dataclasses import dataclass, field
 from enum import Enum
@@ -239,13 +240,21 @@ class WorkcellLayout:
 
 @dataclass
 class SidePickConfig:
+    # Side-pick approach geometry
+    tcp_offset_m: float = 0.06  # flange/tool origin to suction contact point
     pregrasp_offset_x_m: float = 0.15
+    approach_standoff_m: float = 0.15  # preferred replacement for pregrasp_offset_x_m
     retreat_lift_m: float = 0.02
     contact_dwell_s: float = 0.20
     release_dwell_s: float = 0.15
     motion_speed_mps: float = 0.35
+    contact_push_speed_scale: float = 0.80
+    retreat_push_speed_scale: float = 0.90
     tray_thickness_m: float = 0.05
     washer_cycle_s: float = 8.0
+    # Vision mock noise (simulates USB camera + tag solve error)
+    vision_noise_xy_m: float = 0.015
+    vision_confidence_threshold: float = 0.90
 
 
 class VisionGuidedSidePickFSM:
@@ -370,10 +379,14 @@ class VisionGuidedSidePickFSM:
                 self._fault("Dirty tray rack empty")
                 return
             self._active_tray = tray
-            self._start_sequence(self._build_side_pick_segments(tray.pose.pos, tray))
+            side_target = self._current_target or self._tray_side_center_for_pick(tray)
+            self._start_sequence(self._build_side_pick_segments(side_target, tray))
             return
         if self._traj is None and self._active_tray and self._active_tray.bound_to_tool:
             self._transition(SidePickState.PLACE_TO_WASHER)
+            return
+        if self._traj is None and self._active_tray and not self._active_tray.bound_to_tool:
+            self._fault("Side pick failed: vacuum seal not established")
 
     def _handle_place_to_washer(self) -> None:
         if self._active_tray is None:
@@ -406,10 +419,14 @@ class VisionGuidedSidePickFSM:
         if self._traj is None and self._active_tray is None:
             self._active_tray = self._washer_tray
             self._washer_tray = None
-            self._start_sequence(self._build_side_pick_segments(self._active_tray.pose.pos, self._active_tray))
+            side_target = self._current_target or self._tray_side_center_for_pick(self._active_tray)
+            self._start_sequence(self._build_side_pick_segments(side_target, self._active_tray))
             return
         if self._traj is None and self._active_tray and self._active_tray.bound_to_tool:
             self._transition(SidePickState.PLACE_CLEAN)
+            return
+        if self._traj is None and self._active_tray and not self._active_tray.bound_to_tool:
+            self._fault("Clean tray side pick failed: vacuum seal not established")
 
     def _handle_place_clean(self) -> None:
         if self._active_tray is None:
@@ -424,11 +441,14 @@ class VisionGuidedSidePickFSM:
     # ----- trajectory builders -----
 
     def _build_side_pick_segments(self, target: Vec3, tray: SimTray) -> list[TrajectorySegment]:
+        # `target` is the detected tray side-center (not tray center) in world coordinates.
         q = self._side_pick_quat
-        pre = Vec3(target.x - self.cfg.pregrasp_offset_x_m, target.y, target.z)
-        contact = Vec3(target.x, target.y, target.z)
-        lift = Vec3(target.x, target.y, target.z + self.cfg.retreat_lift_m)
-        retreat = Vec3(target.x - self.cfg.pregrasp_offset_x_m, target.y, target.z + self.cfg.retreat_lift_m)
+        approach_sign = self._approach_sign_for_target(target)
+        standoff = self._approach_standoff_m()
+        contact = Vec3(target.x + approach_sign * self.cfg.tcp_offset_m, target.y, target.z)
+        pre = Vec3(contact.x + approach_sign * standoff, contact.y, contact.z)
+        lift = Vec3(contact.x, contact.y, contact.z + self.cfg.retreat_lift_m)
+        retreat = Vec3(pre.x, pre.y, lift.z)
 
         start_pose = self._ee_pose.copy()
         pre_pose = self._solve_ik_with_locked_orientation(pre, q)
@@ -436,15 +456,17 @@ class VisionGuidedSidePickFSM:
         lift_pose = self._solve_ik_with_locked_orientation(lift, q)
         retreat_pose = self._solve_ik_with_locked_orientation(retreat, q)
 
-        tray_side_offset = Vec3(tray.dims_m.x / 2.0 + 0.06, 0.0, 0.0)
+        # tray_center = ee_flange + tool_offset while suction is attached
+        tray_side_offset = Vec3(-approach_sign * (tray.dims_m.x / 2.0 + self.cfg.tcp_offset_m), 0.0, 0.0)
 
         def on_vacuum_on() -> None:
             self.vacuum.turn_on()
-            tray.bind_to_tool(self._ee_pose, tray_side_offset)
+            if self.vacuum.vacuum_ok:
+                tray.bind_to_tool(self._ee_pose, tray_side_offset)
 
         return [
             self._linear_segment("pre_grasp", start_pose, pre_pose, lock_orientation=True),
-            self._horizontal_push_segment("contact_push", pre_pose, contact_pose),
+            self._horizontal_push_segment("contact_push", pre_pose, contact_pose, speed_scale=self.cfg.contact_push_speed_scale),
             TrajectorySegment(
                 name="vacuum_on_dwell",
                 start=contact_pose,
@@ -454,34 +476,41 @@ class VisionGuidedSidePickFSM:
                 on_start=on_vacuum_on,
             ),
             self._linear_segment("retreat_lift_2cm", contact_pose, lift_pose, lock_orientation=True),
-            self._horizontal_push_segment("retreat_back_15cm", lift_pose, retreat_pose),
+            self._horizontal_push_segment("retreat_back_15cm", lift_pose, retreat_pose, speed_scale=self.cfg.retreat_push_speed_scale),
         ]
 
     def _build_place_to_washer_segments(self, tray: SimTray) -> list[TrajectorySegment]:
         q = self._side_pick_quat
         infeed = self.layout.washer_infeed
-        pre = Vec3(infeed.x - 0.20, infeed.y, infeed.z + 0.06)
-        place = Vec3(infeed.x, infeed.y, infeed.z)
-        retreat = Vec3(infeed.x - 0.20, infeed.y, infeed.z + 0.03)
+        target_tray_center = Vec3(infeed.x, infeed.y, infeed.z)
+        approach_sign = self._approach_sign_for_target(target_tray_center)
+        contact = Vec3(
+            target_tray_center.x + approach_sign * (tray.dims_m.x / 2.0 + self.cfg.tcp_offset_m),
+            target_tray_center.y,
+            target_tray_center.z,
+        )
+        pre = Vec3(contact.x + approach_sign * 0.20, contact.y, contact.z + 0.06)
+        retreat = Vec3(contact.x + approach_sign * 0.20, contact.y, contact.z + 0.03)
         home = self.layout.safe_home
 
         start_pose = self._ee_pose.copy()
         pre_pose = self._solve_ik_with_locked_orientation(pre, q)
-        place_pose = self._solve_ik_with_locked_orientation(place, q)
+        place_pose = self._solve_ik_with_locked_orientation(contact, q)
         retreat_pose = self._solve_ik_with_locked_orientation(retreat, q)
         home_pose = self._solve_ik_with_locked_orientation(home, q)
 
         def on_release() -> None:
             self.vacuum.turn_off()
             tray.is_clean = False
-            tray.release_from_tool(place_pose)  # release at conveyor height
+            tray.sync_with_tool(self._ee_pose)
+            tray.release_from_tool(tray.pose.copy())  # release at conveyor contact truth
             self._washer_tray = tray
             self._active_tray = None
             self._washer_elapsed_s = 0.0
 
         return [
             self._linear_segment("washer_approach", start_pose, pre_pose, lock_orientation=True),
-            self._horizontal_push_segment("washer_insert", pre_pose, place_pose),
+            self._horizontal_push_segment("washer_insert", pre_pose, place_pose, speed_scale=self.cfg.contact_push_speed_scale),
             TrajectorySegment(
                 name="vacuum_off_release",
                 start=place_pose,
@@ -490,7 +519,7 @@ class VisionGuidedSidePickFSM:
                 lock_orientation=True,
                 on_start=on_release,
             ),
-            self._horizontal_push_segment("washer_retreat", place_pose, retreat_pose),
+            self._horizontal_push_segment("washer_retreat", place_pose, retreat_pose, speed_scale=self.cfg.retreat_push_speed_scale),
             self._linear_segment("washer_clear", retreat_pose, home_pose, lock_orientation=True),
         ]
 
@@ -498,9 +527,15 @@ class VisionGuidedSidePickFSM:
         q = self._side_pick_quat
         base = self.layout.clean_rack_place_base
         place_z = base.z + self.clean_stack_count * self.cfg.tray_thickness_m
-        place = Vec3(base.x, base.y, place_z)
-        pre = Vec3(place.x - 0.15, place.y, place.z + 0.02)
-        retreat = Vec3(place.x - 0.20, place.y, place.z + 0.03)
+        target_tray_center = Vec3(base.x, base.y, place_z)
+        approach_sign = self._approach_sign_for_target(target_tray_center)
+        place = Vec3(
+            target_tray_center.x + approach_sign * (tray.dims_m.x / 2.0 + self.cfg.tcp_offset_m),
+            target_tray_center.y,
+            target_tray_center.z,
+        )
+        pre = Vec3(place.x + approach_sign * 0.15, place.y, place.z + 0.02)
+        retreat = Vec3(place.x + approach_sign * 0.20, place.y, place.z + 0.03)
         home = self.layout.safe_home
 
         start_pose = self._ee_pose.copy()
@@ -512,13 +547,14 @@ class VisionGuidedSidePickFSM:
         def on_release() -> None:
             self.vacuum.turn_off()
             tray.is_clean = True
-            tray.release_from_tool(place_pose)
+            tray.sync_with_tool(self._ee_pose)
+            tray.release_from_tool(tray.pose.copy())
             self.clean_stack_count += 1
             self._active_tray = None
 
         return [
             self._linear_segment("clean_pre", start_pose, pre_pose, lock_orientation=True),
-            self._horizontal_push_segment("clean_contact", pre_pose, place_pose),
+            self._horizontal_push_segment("clean_contact", pre_pose, place_pose, speed_scale=self.cfg.contact_push_speed_scale),
             TrajectorySegment(
                 name="clean_release",
                 start=place_pose,
@@ -527,7 +563,7 @@ class VisionGuidedSidePickFSM:
                 lock_orientation=True,
                 on_start=on_release,
             ),
-            self._horizontal_push_segment("clean_retreat", place_pose, retreat_pose),
+            self._horizontal_push_segment("clean_retreat", place_pose, retreat_pose, speed_scale=self.cfg.retreat_push_speed_scale),
             self._linear_segment("clean_home", retreat_pose, home_pose, lock_orientation=True),
         ]
 
@@ -544,7 +580,7 @@ class VisionGuidedSidePickFSM:
         duration = max(0.05, dist / speed)
         return TrajectorySegment(name, start, end, duration, lock_orientation=lock_orientation)
 
-    def _horizontal_push_segment(self, name: str, start: Pose, end: Pose) -> TrajectorySegment:
+    def _horizontal_push_segment(self, name: str, start: Pose, end: Pose, speed_scale: float = 0.8) -> TrajectorySegment:
         """Straight horizontal push with orientation lock (no roll/pitch/yaw drift)."""
         end_h = end.copy()
         end_h.pos.z = start.pos.z  # lock vertical height during side-contact push
@@ -553,7 +589,7 @@ class VisionGuidedSidePickFSM:
             start,
             end_h,
             lock_orientation=True,
-            speed_mps=self.cfg.motion_speed_mps * 0.8,
+            speed_mps=self.cfg.motion_speed_mps * max(0.2, speed_scale),
         )
 
     def _start_sequence(self, segments: list[TrajectorySegment]) -> None:
@@ -565,13 +601,13 @@ class VisionGuidedSidePickFSM:
         tray = self._peek_dirty_tray()
         if tray is None:
             return None
-        self.vision.default_target.x = tray.pose.pos.x
-        self.vision.default_target.y = tray.pose.pos.y
-        self.vision.default_target.z = tray.pose.pos.z
+        true_side = self._tray_side_center_for_pick(tray)
+        self.vision.default_target.x = true_side.x
+        self.vision.default_target.y = true_side.y
+        self.vision.default_target.z = true_side.z
         d = self.vision.detect()
-        if d.get("detected") and float(d.get("confidence", 0.0)) >= 0.9:
-            tp = d["target_pose"]
-            return Vec3(float(tp["x_m"]), float(tp["y_m"]), float(tp["z_m"]))
+        if d.get("detected") and float(d.get("confidence", 0.0)) >= self.cfg.vision_confidence_threshold:
+            return self._mock_vision_detect(true_side)
         return None
 
     def _detect_clean_tray_at_return(self) -> Optional[Vec3]:
@@ -580,13 +616,13 @@ class VisionGuidedSidePickFSM:
             return None
         if tray.pose.pos.distance(self.layout.return_pick) > 0.03:
             return None
-        self.vision.default_target.x = tray.pose.pos.x
-        self.vision.default_target.y = tray.pose.pos.y
-        self.vision.default_target.z = tray.pose.pos.z
+        true_side = self._tray_side_center_for_pick(tray)
+        self.vision.default_target.x = true_side.x
+        self.vision.default_target.y = true_side.y
+        self.vision.default_target.z = true_side.z
         d = self.vision.detect()
-        if d.get("detected") and float(d.get("confidence", 0.0)) >= 0.9:
-            tp = d["target_pose"]
-            return Vec3(float(tp["x_m"]), float(tp["y_m"]), float(tp["z_m"]))
+        if d.get("detected") and float(d.get("confidence", 0.0)) >= self.cfg.vision_confidence_threshold:
+            return self._mock_vision_detect(true_side)
         return None
 
     def _update_washer_tray_sim(self, dt: float) -> None:
@@ -648,6 +684,29 @@ class VisionGuidedSidePickFSM:
 
     def _make_pose(self, pos: Vec3, quat: Quat) -> Pose:
         return Pose(pos.copy(), quat)
+
+    def _approach_standoff_m(self) -> float:
+        return float(self.cfg.approach_standoff_m or self.cfg.pregrasp_offset_x_m)
+
+    def _approach_sign_for_target(self, target: Vec3) -> float:
+        # Approach from the current TCP side to avoid crossing through the tray.
+        return 1.0 if self._ee_pose.pos.x >= target.x else -1.0
+
+    def _tray_side_center_for_pick(self, tray: SimTray) -> Vec3:
+        sign = self._approach_sign_for_target(tray.pose.pos)
+        return Vec3(
+            tray.pose.pos.x + sign * (tray.dims_m.x / 2.0),
+            tray.pose.pos.y,
+            tray.pose.pos.z,
+        )
+
+    def _mock_vision_detect(self, true_pos: Vec3) -> Vec3:
+        n = max(0.0, float(self.cfg.vision_noise_xy_m))
+        return Vec3(
+            true_pos.x + random.uniform(-n, n),
+            true_pos.y + random.uniform(-n, n),
+            true_pos.z,
+        )
 
     def _solve_ik_with_locked_orientation(self, pos: Vec3, locked_quat: Quat) -> Pose:
         """IK placeholder for current sim platform.
