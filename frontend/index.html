@@ -4,8 +4,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Vacuum Grasp Dashboard</title>
-    <script src="/static/vendor/tailwind/tailwind-playcdn.js"></script>
-    <script src="/static/vendor/chartjs/chart.umd.min.js"></script>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Chart.js CDN (保留用于真空曲线) -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         body { background-color: #0f172a; }
         .scrollbar-thin::-webkit-scrollbar { width: 6px; }
@@ -19,481 +21,1107 @@
     </style>
 </head>
 <body class="min-h-screen text-slate-300">
-<div class="flex flex-col h-screen">
-    <header class="bg-slate-800 border-b border-slate-700 px-6 py-3">
-        <div class="flex items-center justify-between">
-            <div class="flex items-center gap-4">
-                <div class="text-2xl font-bold text-cyan-400">VACUUM GRASP</div>
-                <div class="text-sm text-slate-500">Reliability & Recovery Module</div>
-            </div>
-            <div class="flex items-center gap-6">
-                <div class="text-center">
-                    <div class="text-xs text-slate-500 uppercase tracking-wider">Current State</div>
-                    <div id="state-display" class="text-3xl font-mono font-bold text-cyan-400">IDLE</div>
+    <div class="flex flex-col h-screen">
+        <!-- Top Bar -->
+        <header class="bg-slate-800 border-b border-slate-700 px-6 py-3">
+            <div class="flex items-center justify-between">
+                <!-- Logo & Title -->
+                <div class="flex items-center gap-4">
+                    <div class="text-2xl font-bold text-cyan-400">VACUUM GRASP</div>
+                    <div class="text-sm text-slate-500">Reliability & Recovery Module</div>
                 </div>
-                <div class="flex items-center gap-2">
-                    <div id="ws-indicator" class="w-3 h-3 rounded-full bg-red-500"></div>
-                    <span id="ws-status" class="text-xs text-slate-400">Disconnected</span>
-                </div>
-                <div class="flex items-center gap-2">
-                    <div id="vacuum-indicator" class="w-4 h-4 rounded-full bg-slate-600"></div>
-                    <span class="text-xs text-slate-400">Vacuum</span>
-                    <span id="vacuum-kpa" class="text-sm font-mono text-slate-500">-- kPa</span>
-                </div>
-            </div>
-            <div class="flex items-center gap-3">
-                <button id="btn-start" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded font-semibold transition">Start</button>
-                <button id="btn-stop" class="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white rounded font-semibold transition">Stop</button>
-                <button id="btn-reset" class="px-4 py-2 bg-slate-600 hover:bg-slate-500 text-white rounded font-semibold transition">Reset</button>
-            </div>
-        </div>
-    </header>
 
-    <main class="flex-1 flex gap-4 p-4 overflow-hidden">
-        <div class="w-64 flex-shrink-0 space-y-4">
-            <div class="bg-slate-800 rounded-lg p-4 border border-slate-700">
-                <h3 class="text-xs text-slate-500 uppercase tracking-wider mb-3">Counters</h3>
-                <div class="space-y-3">
-                    <div class="flex justify-between items-center"><span class="text-slate-400">Success</span><span id="counter-success" class="text-2xl font-mono font-bold text-emerald-400">0</span></div>
-                    <div class="flex justify-between items-center"><span class="text-slate-400">Retry</span><span id="counter-retry" class="text-2xl font-mono font-bold text-amber-400">0</span></div>
-                    <div class="flex justify-between items-center"><span class="text-slate-400">Recover</span><span id="counter-recover" class="text-2xl font-mono font-bold text-red-400">0</span></div>
-                </div>
-            </div>
-            <div class="bg-slate-800 rounded-lg p-4 border border-slate-700"><h3 class="text-xs text-slate-500 uppercase tracking-wider mb-2">Last Event</h3><div id="last-event" class="font-mono text-cyan-400 text-sm">--</div></div>
-            <div class="bg-slate-800 rounded-lg p-4 border border-slate-700">
-                <h3 class="text-xs text-slate-500 uppercase tracking-wider mb-2">TCP Pose</h3>
-                <div class="font-mono text-sm space-y-1">
-                    <div>X: <span id="robot-x" class="text-slate-300">0.000</span> m</div>
-                    <div>Y: <span id="robot-y" class="text-slate-300">0.000</span> m</div>
-                    <div>Z: <span id="robot-z" class="text-slate-300">0.300</span> m</div>
-                </div>
-            </div>
-            <div class="bg-slate-800 rounded-lg p-4 border border-slate-700">
-                <h3 class="text-xs text-slate-500 uppercase tracking-wider mb-2">Vision</h3>
-                <div class="font-mono text-sm space-y-1">
-                    <div>Detected: <span id="vision-detected" class="text-slate-300">No</span></div>
-                    <div>Confidence: <span id="vision-confidence" class="text-slate-300">0.00</span></div>
-                </div>
-            </div>
-        </div>
+                <!-- Current State (Large) -->
+                <div class="flex items-center gap-6">
+                    <div class="text-center">
+                        <div class="text-xs text-slate-500 uppercase tracking-wider">Current State</div>
+                        <div id="state-display" class="text-3xl font-mono font-bold text-cyan-400">IDLE</div>
+                    </div>
 
-        <div class="flex-1 flex flex-col gap-4">
-            <div class="bg-slate-800 rounded-lg border border-slate-700 flex-1 overflow-hidden">
-                <div id="workspace3d" style="width:100%;height:100%;position:relative;">
-                    <div id="hudState" style="position:absolute;left:12px;top:10px;color:#d7e1ea;font:14px/1.2 system-ui;z-index:2;pointer-events:none;">
-                        <div style="font-weight:bold;">STATE: <span id="hudStateText" style="color:#22d3ee;">IDLE</span></div>
-                        <div style="margin-top:6px;opacity:.8;font-size:12px;">Vision: <span id="hudVision">-</span> | Vacuum: <span id="hudVac">OFF</span> | Seal: <span id="hudSeal">NO</span></div>
-                        <div style="margin-top:4px;opacity:.7;font-size:11px;color:#94a3b8;">Left-click: Rotate | Scroll: Zoom | Right-click: Pan</div>
+                    <!-- WS Connection Status -->
+                    <div class="flex items-center gap-2">
+                        <div id="ws-indicator" class="w-3 h-3 rounded-full bg-red-500"></div>
+                        <span id="ws-status" class="text-xs text-slate-400">Disconnected</span>
+                    </div>
+
+                    <!-- Vacuum Status -->
+                    <div class="flex items-center gap-2">
+                        <div id="vacuum-indicator" class="w-4 h-4 rounded-full bg-slate-600"></div>
+                        <span class="text-xs text-slate-400">Vacuum</span>
+                        <span id="vacuum-kpa" class="text-sm font-mono text-slate-500">-- kPa</span>
+                    </div>
+                </div>
+
+                <!-- Control Buttons -->
+                <div class="flex items-center gap-3">
+                    <button id="btn-start" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded font-semibold transition">
+                        Start
+                    </button>
+                    <button id="btn-stop" class="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white rounded font-semibold transition">
+                        Stop
+                    </button>
+                    <button id="btn-reset" class="px-4 py-2 bg-slate-600 hover:bg-slate-500 text-white rounded font-semibold transition">
+                        Reset
+                    </button>
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="flex-1 flex gap-4 p-4 overflow-hidden">
+            <!-- Left Column: Counters -->
+            <div class="w-64 flex-shrink-0 space-y-4">
+                <div class="bg-slate-800 rounded-lg p-4 border border-slate-700">
+                    <h3 class="text-xs text-slate-500 uppercase tracking-wider mb-3">Counters</h3>
+                    <div class="space-y-3">
+                        <div class="flex justify-between items-center">
+                            <span class="text-slate-400">Success</span>
+                            <span id="counter-success" class="text-2xl font-mono font-bold text-emerald-400">0</span>
+                        </div>
+                        <div class="flex justify-between items-center">
+                            <span class="text-slate-400">Retry</span>
+                            <span id="counter-retry" class="text-2xl font-mono font-bold text-amber-400">0</span>
+                        </div>
+                        <div class="flex justify-between items-center">
+                            <span class="text-slate-400">Recover</span>
+                            <span id="counter-recover" class="text-2xl font-mono font-bold text-red-400">0</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Last Event -->
+                <div class="bg-slate-800 rounded-lg p-4 border border-slate-700">
+                    <h3 class="text-xs text-slate-500 uppercase tracking-wider mb-2">Last Event</h3>
+                    <div id="last-event" class="font-mono text-cyan-400 text-sm">--</div>
+                </div>
+
+                <!-- Robot Position -->
+                <div class="bg-slate-800 rounded-lg p-4 border border-slate-700">
+                    <h3 class="text-xs text-slate-500 uppercase tracking-wider mb-2">Robot Position</h3>
+                    <div class="font-mono text-sm space-y-1">
+                        <div>X: <span id="robot-x" class="text-slate-300">0.000</span> m</div>
+                        <div>Y: <span id="robot-y" class="text-slate-300">0.000</span> m</div>
+                        <div>Z: <span id="robot-z" class="text-slate-300">0.300</span> m</div>
+                    </div>
+                </div>
+
+                <!-- Vision Status -->
+                <div class="bg-slate-800 rounded-lg p-4 border border-slate-700">
+                    <h3 class="text-xs text-slate-500 uppercase tracking-wider mb-2">Vision</h3>
+                    <div class="font-mono text-sm space-y-1">
+                        <div>Detected: <span id="vision-detected" class="text-slate-300">No</span></div>
+                        <div>Confidence: <span id="vision-confidence" class="text-slate-300">0.00</span></div>
+                    </div>
+                </div>
+
+                <div class="bg-slate-800 rounded-lg p-4 border border-slate-700">
+                    <h3 class="text-xs text-slate-500 uppercase tracking-wider mb-2">Task & Links</h3>
+                    <div class="font-mono text-xs space-y-1">
+                        <div>Phase: <span id="task-phase" class="text-cyan-300">WAITING</span></div>
+                        <div>Python: <span id="status-python" class="text-red-400">OFFLINE</span></div>
+                        <div>Robot: <span id="status-robot" class="text-slate-300">--</span></div>
+                        <div>Camera: <span id="status-camera" class="text-slate-300">--</span></div>
+                        <div>Conveyor: <span id="status-conveyor" class="text-slate-300">--</span></div>
+                        <div>Washer: <span id="status-washer" class="text-slate-300">--</span></div>
+                        <div>Tray: <span id="payload-label" class="text-slate-300">--</span></div>
                     </div>
                 </div>
             </div>
-        </div>
 
-        <div class="w-72 flex-shrink-0 space-y-4">
-            <div class="bg-slate-800 rounded-lg p-4 border border-slate-700">
-                <h3 class="text-xs text-slate-500 uppercase tracking-wider mb-3">Fault Injection</h3>
-                <div class="space-y-3">
-                    <button id="btn-fault-pre" class="w-full px-4 py-2 bg-red-900/50 hover:bg-red-800/50 border border-red-700 text-red-300 rounded text-sm transition">Next Pre-Suction Fail</button>
-                    <button id="btn-fault-drop" class="w-full px-4 py-2 bg-red-900/50 hover:bg-red-800/50 border border-red-700 text-red-300 rounded text-sm transition">Drop Once During Transport</button>
-                    <button id="btn-clear-log" class="w-full px-4 py-2 bg-slate-700 hover:bg-slate-600 text-slate-300 rounded text-sm transition">Clear Log</button>
+            <!-- Center Column: 3D Workspace -->
+            <div class="flex-1 flex flex-col gap-4">
+                <!-- 3D Workspace -->
+                <div class="bg-slate-800 rounded-lg border border-slate-700 flex-1 overflow-hidden">
+                    <div id="workspace3d" style="width:100%;height:100%;position:relative;">
+                        <!-- HUD Overlay -->
+                        <div id="hudState" style="position:absolute;left:12px;top:10px;color:#d7e1ea;font:14px/1.2 system-ui;z-index:2;pointer-events:none;">
+                            <div style="font-weight:bold;">STATE: <span id="hudStateText" style="color:#22d3ee;">IDLE</span></div>
+                            <div style="margin-top:6px;opacity:.8;font-size:12px;">
+                                Vision: <span id="hudVision">-</span> | Vacuum: <span id="hudVac">OFF</span> | Seal: <span id="hudSeal">NO</span>
+                            </div>
+                            <div style="margin-top:4px;opacity:.7;font-size:11px;color:#94a3b8;">
+                                Left-click: Rotate | Scroll: Zoom | Right-click: Pan
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
-            <div class="bg-slate-800 rounded-lg p-4 border border-slate-700">
-                <h3 class="text-xs text-slate-500 uppercase tracking-wider mb-3">State Legend</h3>
-                <div class="text-xs font-mono space-y-1 max-h-48 overflow-y-auto scrollbar-thin">
-                    <div class="text-slate-400">IDLE</div><div class="text-blue-400">DETECTING_TARGET</div><div class="text-blue-400">PLANNING_APPROACH</div>
-                    <div class="text-cyan-400">MOVING_TO_PREGRASP</div><div class="text-cyan-400">DESCENDING_TO_CONTACT</div><div class="text-amber-400">PRE_SUCTION_CHECK</div>
-                    <div class="text-amber-400">LIFT_VERIFICATION</div><div class="text-emerald-400">TRANSPORT_MONITORING</div><div class="text-emerald-400">MOVING_TO_PLACE</div>
-                    <div class="text-purple-400">RELEASING_LOAD</div><div class="text-purple-400">RETURNING_HOME</div><div class="text-yellow-400">AUTO_RETRYING_GRASP</div>
-                    <div class="text-orange-400">AUTO_RECOVERY_MODE</div><div class="text-red-500">FAULT_LATCHED</div>
+
+            <!-- Right Column: Fault Injection -->
+            <div class="w-72 flex-shrink-0 space-y-4">
+                <div class="bg-slate-800 rounded-lg p-4 border border-slate-700">
+                    <h3 class="text-xs text-slate-500 uppercase tracking-wider mb-3">Fault Injection</h3>
+                    <div class="space-y-3">
+                        <button id="btn-fault-pre" class="w-full px-4 py-2 bg-red-900/50 hover:bg-red-800/50 border border-red-700 text-red-300 rounded text-sm transition">
+                            Next Pre-Suction Fail
+                        </button>
+                        <button id="btn-fault-drop" class="w-full px-4 py-2 bg-red-900/50 hover:bg-red-800/50 border border-red-700 text-red-300 rounded text-sm transition">
+                            Drop Once During Transport
+                        </button>
+                        <button id="btn-clear-log" class="w-full px-4 py-2 bg-slate-700 hover:bg-slate-600 text-slate-300 rounded text-sm transition">
+                            Clear Log
+                        </button>
+                    </div>
+                </div>
+
+                <div class="bg-slate-800 rounded-lg p-4 border border-slate-700">
+                    <h3 class="text-xs text-slate-500 uppercase tracking-wider mb-2">Camera Debug</h3>
+                    <div class="rounded border border-slate-700 overflow-hidden bg-slate-900 aspect-video flex items-center justify-center">
+                        <img id="camera-stream" src="/api/camera/stream.mjpg" alt="camera stream" class="w-full h-full object-cover" />
+                        <div id="camera-stream-fallback" class="hidden text-xs text-slate-500 p-3 text-center">Camera stream unavailable</div>
+                    </div>
+                    <div class="mt-2 text-[11px] text-slate-500">MJPEG debug stream (placeholder in sim mode)</div>
+                </div>
+
+                <!-- State Legend -->
+                <div class="bg-slate-800 rounded-lg p-4 border border-slate-700">
+                    <h3 class="text-xs text-slate-500 uppercase tracking-wider mb-3">State Legend</h3>
+                    <div class="text-xs font-mono space-y-1 max-h-48 overflow-y-auto scrollbar-thin">
+                        <div class="text-slate-400">IDLE</div>
+                        <div class="text-blue-400">DETECTING_TARGET</div>
+                        <div class="text-blue-400">PLANNING_APPROACH</div>
+                        <div class="text-cyan-400">MOVING_TO_PREGRASP</div>
+                        <div class="text-cyan-400">DESCENDING_TO_CONTACT</div>
+                        <div class="text-amber-400">PRE_SUCTION_CHECK</div>
+                        <div class="text-amber-400">LIFT_VERIFICATION</div>
+                        <div class="text-emerald-400">TRANSPORT_MONITORING</div>
+                        <div class="text-emerald-400">MOVING_TO_PLACE</div>
+                        <div class="text-purple-400">RELEASING_LOAD</div>
+                        <div class="text-purple-400">RETURNING_HOME</div>
+                        <div class="text-yellow-400">AUTO_RETRYING_GRASP</div>
+                        <div class="text-orange-400">AUTO_RECOVERY_MODE</div>
+                        <div class="text-red-500">FAULT_LATCHED</div>
+                    </div>
+                </div>
+
+                <!-- Grip Status -->
+                <div class="bg-slate-800 rounded-lg p-4 border border-slate-700">
+                    <h3 class="text-xs text-slate-500 uppercase tracking-wider mb-2">Grip Status</h3>
+                    <div class="font-mono text-sm space-y-1">
+                        <div>Vacuum: <span id="grip-vacuum" class="text-slate-300">OFF</span></div>
+                        <div>Sealed: <span id="grip-sealed" class="text-slate-300">NO</span></div>
+                    </div>
                 </div>
             </div>
-            <div class="bg-slate-800 rounded-lg p-4 border border-slate-700">
-                <h3 class="text-xs text-slate-500 uppercase tracking-wider mb-2">Grip Status</h3>
-                <div class="font-mono text-sm space-y-1"><div>Vacuum: <span id="grip-vacuum" class="text-slate-300">OFF</span></div><div>Sealed: <span id="grip-sealed" class="text-slate-300">NO</span></div></div>
+        </main>
+
+        <!-- Bottom: Event Log -->
+        <footer class="bg-slate-800 border-t border-slate-700 p-4">
+            <h3 class="text-xs text-slate-500 uppercase tracking-wider mb-2">Event Log</h3>
+            <div id="log-container" class="h-24 overflow-y-auto font-mono text-xs scrollbar-thin bg-slate-900 rounded p-2">
+                <div class="text-slate-500">Waiting for connection...</div>
             </div>
-        </div>
-    </main>
+        </footer>
+    </div>
 
-    <footer class="bg-slate-800 border-t border-slate-700 p-4">
-        <h3 class="text-xs text-slate-500 uppercase tracking-wider mb-2">Event Log</h3>
-        <div id="log-container" class="h-24 overflow-y-auto font-mono text-xs scrollbar-thin bg-slate-900 rounded p-2"><div class="text-slate-500">Waiting for connection...</div></div>
-    </footer>
-</div>
+    <!-- Three.js Module -->
+    <script type="module">
+const THREE_MODULE_URL = "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js";
+const ORBIT_CONTROLS_URL = "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/controls/OrbitControls.js";
 
-<script type="module">
-import * as THREE from '/static/vendor/three/three.module.js';
-import { OrbitControls } from '/static/vendor/three/OrbitControls.js';
-import URDFLoader from '/static/vendor/three/URDFLoader.js';
-
-const JOINT_NAMES = ['shoulder_pan_joint', 'shoulder_lift_joint', 'elbow_joint', 'wrist_1_joint', 'wrist_2_joint', 'wrist_3_joint'];
-
+// ============ State ============
+let ws = null;
+let wsPingTimer = null;
+let reconnectAttempts = 0;
+const reconnectDelays = [1000, 2000, 4000, 8000, 10000];
 let latest = {
-  ts: 0,
-  state: 'IDLE',
-  vacuum_ok: false,
-  vacuum_kpa: null,
-  retry_count: 0,
-  recover_count: 0,
-  success_count: 0,
-  last_event: '',
-  log: [],
-  robot_pose: { x_m: 0, y_m: 0, z_m: 0.3, roll_deg: 0, pitch_deg: 0, yaw_deg: 0 },
-  joint_angles_rad: [0, -1.1, 1.6, 0.6, 1.57, 0],
-  target_pose: { x_m: 0.35, y_m: 0.12, z_m: 0 },
-  place_pose: { x_m: -0.25, y_m: 0.25, z_m: 0 },
-  vision: { detected: false, confidence: 0 },
-  grip: { vacuum_on: false, sealed: false },
-  fault: { active: false, code: '', msg: '' },
+    ts: 0,
+    state: "IDLE",
+    vacuum_ok: false,
+    vacuum_kpa: null,
+    retry_count: 0,
+    recover_count: 0,
+    success_count: 0,
+    last_event: "",
+    log: [],
+    robot_pose: {x_m: 0, y_m: 0, z_m: 0.3, roll_deg: 0, pitch_deg: 0, yaw_deg: 0},
+    target_pose: {x_m: -0.35, y_m: 0.18, z_m: 0},
+    place_pose: {x_m: 0.22, y_m: 0.14, z_m: 0.05},
+    joint_angles_rad: [0, -1.1, 1.6, 0.6, 1.57, 0],
+    vision: {detected: false, confidence: 0, tag_id: null, source: 'wrist_usb', camera_ok: false, pose_valid: false},
+    grip: {vacuum_on: false, sealed: false},
+    fault: {active: false, code: "", msg: ""},
+    conveyor: {mode: 'real_io', running_cmd: false, running_fb: false, ready: true, last_start_ts: 0, timeout_active: false},
+    vacuum: {mode: 'simulated_io', pressure_kpa: null, sensor_ok: false},
+    robot: {mode: 'simulated', connected: false, servo_enabled: false, motion_busy: false, estop_latched: false},
+    task: {name: 'clean_to_conveyor_to_dirty', phase: 'WAITING', cycle_id: '', paused: false},
+    safety: {web_motion_allowed: false, manual_jog_enabled: false},
+    payload: {kind: 'square_tray_10_75', label: 'Square Tray 10.75', dims_m: {x_m: 0.2731, y_m: 0.2731, z_m: 0.0318}, tag_size_m: 0.05, is_clean: false},
+    washer: {model: 'MIMASA DA-80', mode: 'simulated', busy: false, done: false, cycle_time_s: 12, remaining_s: 0}
 };
 
-const $ = (id) => document.getElementById(id);
-const stateDisplay = $('state-display');
-const wsIndicator = $('ws-indicator');
-const wsStatus = $('ws-status');
-const vacuumIndicator = $('vacuum-indicator');
-const vacuumKpa = $('vacuum-kpa');
+// ============ DOM Elements ============
+const stateDisplay = document.getElementById('state-display');
+const wsIndicator = document.getElementById('ws-indicator');
+const wsStatus = document.getElementById('ws-status');
+const vacuumIndicator = document.getElementById('vacuum-indicator');
+const vacuumKpa = document.getElementById('vacuum-kpa');
+const counterSuccess = document.getElementById('counter-success');
+const counterRetry = document.getElementById('counter-retry');
+const counterRecover = document.getElementById('counter-recover');
+const lastEvent = document.getElementById('last-event');
+const logContainer = document.getElementById('log-container');
+const hudStateText = document.getElementById('hudStateText');
+const hudVision = document.getElementById('hudVision');
+const hudVac = document.getElementById('hudVac');
+const hudSeal = document.getElementById('hudSeal');
+const taskPhaseEl = document.getElementById('task-phase');
+const statusPythonEl = document.getElementById('status-python');
+const statusRobotEl = document.getElementById('status-robot');
+const statusCameraEl = document.getElementById('status-camera');
+const statusConveyorEl = document.getElementById('status-conveyor');
+const statusWasherEl = document.getElementById('status-washer');
+const payloadLabelEl = document.getElementById('payload-label');
+const cameraStreamEl = document.getElementById('camera-stream');
+const cameraStreamFallbackEl = document.getElementById('camera-stream-fallback');
 
-const container = $('workspace3d');
-const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x0b0f14);
-const camera = new THREE.PerspectiveCamera(55, container.clientWidth / container.clientHeight, 0.01, 100);
-camera.position.set(1.4, 1.0, 1.2);
-const renderer = new THREE.WebGLRenderer({ antialias: true });
-renderer.setSize(container.clientWidth, container.clientHeight);
-renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
-container.appendChild(renderer.domElement);
+const WORKCELL_LAYOUT = {
+    dirtyRack: { x_m: -0.35, y_m: 0.18, z_m: 0.0 },
+    cleanRack: { x_m: -0.35, y_m: -0.18, z_m: 0.0 },
+    washerLoad: { x_m: 0.22, y_m: 0.14, z_m: 0.05 },
+    washerReturn: { x_m: 0.24, y_m: -0.12, z_m: 0.05 },
+    washerBody: { center_x_m: 0.58, center_y_m: 0.02, size_x_m: 0.95, size_y_m: 0.52, size_h_m: 0.42 },
+    returnChute: { center_x_m: 0.42, center_y_m: -0.18, size_x_m: 0.55, size_y_m: 0.14, size_h_m: 0.08 }
+};
 
-const controls = new OrbitControls(camera, renderer.domElement);
-controls.target.set(0, 0.45, 0);
-controls.enableDamping = true;
+const TRAY_BASE_DIMS = { x_m: 0.30, y_m: 0.22, z_m: 0.03 };
 
-scene.add(new THREE.AmbientLight(0xffffff, 0.65));
-const dir = new THREE.DirectionalLight(0xffffff, 0.9); dir.position.set(2, 3, 2); scene.add(dir);
-scene.add(new THREE.AxesHelper(0.45));
-const grid = new THREE.GridHelper(3, 30, 0x334155, 0x1f2a37); grid.position.y = 0; scene.add(grid);
+// ============ Three.js Setup (Guarded) ============
+const container = document.getElementById('workspace3d');
+const w = () => container.clientWidth;
+const h = () => container.clientHeight;
 
-let robot = null;
-let eeGroup = null;
-let cups = [];
+let sceneNoticeEl = null;
+function set3DNotice(title, detail = '', tone = 'warn') {
+    if (!container) return;
 
-// Conveyor / Tray / Rack / PlaceZone
-const conveyor = new THREE.Mesh(new THREE.BoxGeometry(1.3, 0.08, 0.24), new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.9 }));
-conveyor.position.set(0.45, 0.04, 0.0);
-scene.add(conveyor);
+    if (!sceneNoticeEl) {
+        sceneNoticeEl = document.createElement('div');
+        sceneNoticeEl.style.position = 'absolute';
+        sceneNoticeEl.style.inset = '12px';
+        sceneNoticeEl.style.display = 'flex';
+        sceneNoticeEl.style.alignItems = 'center';
+        sceneNoticeEl.style.justifyContent = 'center';
+        sceneNoticeEl.style.pointerEvents = 'none';
+        sceneNoticeEl.style.zIndex = '5';
+        container.appendChild(sceneNoticeEl);
+    }
 
-const tray = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.025, 0.14), new THREE.MeshStandardMaterial({ color: 0x60a5fa, transparent: true, opacity: 0.35 }));
-tray.position.set(0.35, 0.092, 0.12);
-scene.add(tray);
+    const panel = document.createElement('div');
+    panel.style.maxWidth = '320px';
+    panel.style.padding = '10px 12px';
+    panel.style.borderRadius = '10px';
+    panel.style.border = '1px solid rgba(148,163,184,0.25)';
+    panel.style.background = 'rgba(15,23,42,0.85)';
+    panel.style.color = '#cbd5e1';
+    panel.style.fontSize = '12px';
+    panel.style.lineHeight = '1.4';
+    panel.style.textAlign = 'left';
+    if (tone === 'error') {
+        panel.style.borderColor = 'rgba(244,63,94,0.35)';
+        panel.style.color = '#fecdd3';
+    } else if (tone === 'info') {
+        panel.style.borderColor = 'rgba(96,165,250,0.35)';
+        panel.style.color = '#bfdbfe';
+    }
 
-const marker = new THREE.Mesh(new THREE.SphereGeometry(0.015, 20, 16), new THREE.MeshStandardMaterial({ color: 0xff4d4d }));
-marker.position.set(0.35, 0.15, 0.12);
-scene.add(marker);
+    const titleEl = document.createElement('div');
+    titleEl.style.fontWeight = '600';
+    titleEl.textContent = title;
+    panel.appendChild(titleEl);
 
-const placeZone = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.02, 0.16), new THREE.MeshStandardMaterial({ color: 0xa7f3d0, transparent: true, opacity: 0.25 }));
-placeZone.position.set(-0.25, 0.01, 0.25);
-scene.add(placeZone);
+    if (detail) {
+        const detailEl = document.createElement('div');
+        detailEl.style.marginTop = '4px';
+        detailEl.style.opacity = '0.9';
+        detailEl.textContent = detail;
+        panel.appendChild(detailEl);
+    }
 
-const rack = new THREE.Group();
-const rackMat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.8 });
-const rackW = 0.5, rackH = 0.7, rackD = 0.22;
-const postGeo = new THREE.BoxGeometry(0.02, rackH, 0.02);
-const shelfGeo = new THREE.BoxGeometry(rackW, 0.02, rackD);
-[[-rackW/2, rackH/2, -rackD/2],[rackW/2, rackH/2, -rackD/2],[-rackW/2, rackH/2, rackD/2],[rackW/2, rackH/2, rackD/2]].forEach(p=>{const m=new THREE.Mesh(postGeo,rackMat);m.position.set(...p);rack.add(m);});
-[0.12,0.36,0.60].forEach(y=>{const s=new THREE.Mesh(shelfGeo,rackMat);s.position.set(0,y,0);rack.add(s);});
-rack.position.set(-0.55,0,-0.35);
-scene.add(rack);
-
-function buildVGC10() {
-  const group = new THREE.Group();
-  const body = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.05, 0.10), new THREE.MeshStandardMaterial({ color: 0x6b7280, roughness: 0.6 }));
-  group.add(body);
-  const localCups = [];
-  for (let i = 0; i < 10; i++) {
-    const cup = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.012, 0.01, 16), new THREE.MeshStandardMaterial({ color: 0x0f172a }));
-    cup.rotation.x = Math.PI / 2;
-    cup.position.set(-0.045 + i * 0.01, -0.03, 0);
-    group.add(cup);
-    localCups.push(cup);
-  }
-  return { group, localCups };
+    sceneNoticeEl.replaceChildren(panel);
+    sceneNoticeEl.style.display = 'flex';
 }
 
-async function loadRobotUrdf() {
-  const loader = new URDFLoader();
-  robot = await loader.loadAsync('/static/assets/robot/crx20ial/robot.urdf');
-  robot.name = 'crx20ial';
-  robot.rotation.set(0, 0, 0);
-  robot.position.set(0, 0, 0);
-  scene.add(robot);
-
-  const vgc10 = buildVGC10();
-  eeGroup = vgc10.group;
-  cups = vgc10.localCups;
-
-  const eeLink = robot.links?.tool0 || robot.links?.ee_link || robot.links?.link_6 || robot;
-  eeGroup.position.set(0, 0.05, 0);
-  eeLink.add(eeGroup);
+function clear3DNotice() {
+    if (sceneNoticeEl) {
+        sceneNoticeEl.style.display = 'none';
+        sceneNoticeEl.replaceChildren();
+    }
 }
 
-function mapPose(pose) {
-  return { x: pose.x_m, y: pose.z_m, z: pose.y_m }; // x->X, y->Z, z->Y
+function createNoopThreeApp() {
+    return {
+        ready: false,
+        updateScene() {},
+        renderFrame() {},
+        resize() {}
+    };
+}
+
+let threeApp = createNoopThreeApp();
+
+function init3DFallback(reason, error) {
+    const detail = error ? (error.message || String(error)) : 'Unknown error';
+    set3DNotice('3D workspace unavailable', `${reason}. Dashboard controls and WS stay active. ${detail}`, 'error');
+    threeApp = createNoopThreeApp();
+}
+
+function buildThreeApp(THREE, OrbitControls) {
+    if (!container) {
+        throw new Error('Missing #workspace3d container');
+    }
+
+    const width = Math.max(1, w());
+    const height = Math.max(1, h());
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x0b0f14);
+
+    const camera = new THREE.PerspectiveCamera(55, width / height, 0.01, 50);
+    camera.position.set(1.0, 0.8, 0.8);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(width, height);
+    renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    container.querySelectorAll('canvas').forEach((c) => c.remove());
+    container.appendChild(renderer.domElement);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.target.set(0, 0.15, 0);
+    controls.enableDamping = true;
+
+    // Lights
+    scene.add(new THREE.AmbientLight(0xffffff, 0.55));
+    const dir = new THREE.DirectionalLight(0xffffff, 0.9);
+    dir.position.set(2, 2, 1);
+    scene.add(dir);
+
+    // Helpers
+    const axes = new THREE.AxesHelper(0.35);
+    scene.add(axes);
+    const grid = new THREE.GridHelper(2, 20, 0x334155, 0x1f2a37);
+    grid.position.y = 0;
+    scene.add(grid);
+
+    // ============ Build CRX-like Arm ============
+    const root = new THREE.Group();
+    scene.add(root);
+
+    const baseMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.6, metalness: 0.05 });
+    const accentMat = new THREE.MeshStandardMaterial({ color: 0x3bd26f, roughness: 0.5, metalness: 0.05 });
+    const darkMat = new THREE.MeshStandardMaterial({ color: 0x101827, roughness: 0.7, metalness: 0.1 });
+
+    const base = new THREE.Mesh(new THREE.CylinderGeometry(0.10, 0.12, 0.05, 32), darkMat);
+    base.position.set(0, 0.025, 0);
+    root.add(base);
+
+    const pedestal = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.09, 0.20, 32), baseMat);
+    pedestal.position.set(0, 0.14, 0);
+    root.add(pedestal);
+
+    const jointSphere = (r = 0.03, mat = accentMat) => new THREE.Mesh(new THREE.SphereGeometry(r, 24, 16), mat);
+    const link = (len = 0.22, r = 0.022, mat = baseMat) => {
+        const g = new THREE.CylinderGeometry(r, r, len, 20);
+        const m = new THREE.Mesh(g, mat);
+        m.geometry.translate(0, len / 2, 0);
+        return m;
+    };
+
+    const j1 = jointSphere(0.035);
+    j1.position.set(0, 0.25, 0);
+    root.add(j1);
+
+    const l1 = link(0.25, 0.024, baseMat);
+    l1.position.copy(j1.position);
+    root.add(l1);
+
+    const j2 = jointSphere(0.032);
+    j2.position.set(0, 0.50, 0);
+    root.add(j2);
+
+    const l2 = link(0.22, 0.022, baseMat);
+    l2.position.copy(j2.position);
+    root.add(l2);
+
+    const j3 = jointSphere(0.028);
+    j3.position.set(0, 0.72, 0);
+    root.add(j3);
+
+    const l3 = link(0.18, 0.020, baseMat);
+    l3.position.copy(j3.position);
+    root.add(l3);
+
+    const ee = new THREE.Group();
+    scene.add(ee);
+
+    const eeBody = new THREE.Mesh(
+        new THREE.BoxGeometry(0.12, 0.06, 0.10),
+        new THREE.MeshStandardMaterial({ color: 0x6b7280, roughness: 0.5, metalness: 0.2 })
+    );
+    ee.add(eeBody);
+
+    const cupMat = new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.8, metalness: 0.1 });
+    const cups = [];
+    for (let i = 0; i < 10; i++) {
+        const cup = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.012, 0.01, 18), cupMat.clone());
+        cup.rotation.x = Math.PI / 2;
+        cup.position.set(-0.045 + i * 0.01, -0.035, 0);
+        ee.add(cup);
+        cups.push(cup);
+    }
+
+    const eeRing = new THREE.Mesh(new THREE.TorusGeometry(0.03, 0.004, 16, 32), accentMat);
+    eeRing.rotation.x = Math.PI / 2;
+    eeRing.position.set(0, 0.03, 0);
+    ee.add(eeRing);
+
+    const tcp = new THREE.Mesh(
+        new THREE.SphereGeometry(0.008, 16, 12),
+        new THREE.MeshStandardMaterial({ color: 0xffcc00 })
+    );
+    tcp.position.set(0, -0.045, 0);
+    ee.add(tcp);
+
+    const armLineMat = new THREE.LineBasicMaterial({ color: 0x93c5fd });
+    const armLineGeo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]);
+    const armLine = new THREE.Line(armLineGeo, armLineMat);
+    scene.add(armLine);
+
+    const trayMat = new THREE.MeshStandardMaterial({ color: 0xf59e0b, transparent: true, opacity: 0.45, roughness: 0.6 });
+    const tray = new THREE.Mesh(new THREE.BoxGeometry(TRAY_BASE_DIMS.x_m, Math.max(0.01, TRAY_BASE_DIMS.z_m), TRAY_BASE_DIMS.y_m), trayMat);
+    tray.position.set(WORKCELL_LAYOUT.dirtyRack.x_m, 0.01, WORKCELL_LAYOUT.dirtyRack.y_m);
+    scene.add(tray);
+
+    const placeZone = new THREE.Mesh(
+        new THREE.BoxGeometry(0.18, 0.02, 0.12),
+        new THREE.MeshStandardMaterial({ color: 0xa7f3d0, transparent: true, opacity: 0.25 })
+    );
+    placeZone.position.set(WORKCELL_LAYOUT.washerLoad.x_m, 0.01, WORKCELL_LAYOUT.washerLoad.y_m);
+    scene.add(placeZone);
+
+    const marker = new THREE.Mesh(
+        new THREE.SphereGeometry(0.015, 18, 12),
+        new THREE.MeshStandardMaterial({ color: 0xff4d4d })
+    );
+    marker.position.copy(tray.position).add(new THREE.Vector3(0, 0.06, 0));
+    scene.add(marker);
+
+    // Workcell layout helpers (dirty/clean racks, washer body, return chute)
+    const rackMatDirty = new THREE.MeshStandardMaterial({ color: 0xef4444, roughness: 0.7, metalness: 0.05, transparent: true, opacity: 0.25 });
+    const rackMatClean = new THREE.MeshStandardMaterial({ color: 0x22c55e, roughness: 0.7, metalness: 0.05, transparent: true, opacity: 0.25 });
+    const washerMat = new THREE.MeshStandardMaterial({ color: 0x94a3b8, roughness: 0.55, metalness: 0.2 });
+    const chuteMat = new THREE.MeshStandardMaterial({ color: 0xfb923c, roughness: 0.6, metalness: 0.1, transparent: true, opacity: 0.35 });
+
+    const dirtyRack = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.40, 0.22), rackMatDirty);
+    const cleanRack = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.40, 0.22), rackMatClean);
+    const washerBody = new THREE.Mesh(
+        new THREE.BoxGeometry(WORKCELL_LAYOUT.washerBody.size_x_m, WORKCELL_LAYOUT.washerBody.size_h_m, WORKCELL_LAYOUT.washerBody.size_y_m),
+        washerMat
+    );
+    const returnChute = new THREE.Mesh(
+        new THREE.BoxGeometry(WORKCELL_LAYOUT.returnChute.size_x_m, WORKCELL_LAYOUT.returnChute.size_h_m, WORKCELL_LAYOUT.returnChute.size_y_m),
+        chuteMat
+    );
+    const washerLoadMarker = new THREE.Mesh(
+        new THREE.BoxGeometry(0.12, 0.012, 0.12),
+        new THREE.MeshStandardMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.35 })
+    );
+    const washerReturnMarker = new THREE.Mesh(
+        new THREE.BoxGeometry(0.12, 0.012, 0.12),
+        new THREE.MeshStandardMaterial({ color: 0xf97316, transparent: true, opacity: 0.35 })
+    );
+    scene.add(dirtyRack, cleanRack, washerBody, returnChute, washerLoadMarker, washerReturnMarker);
+
+    const placeAtPose = (mesh, pose, yOffset = 0) => {
+        mesh.position.set(asNumber(pose.x_m, 0), yOffset, asNumber(pose.y_m, 0));
+    };
+    placeAtPose(dirtyRack, WORKCELL_LAYOUT.dirtyRack, 0.20);
+    placeAtPose(cleanRack, WORKCELL_LAYOUT.cleanRack, 0.20);
+    washerBody.position.set(
+        WORKCELL_LAYOUT.washerBody.center_x_m,
+        WORKCELL_LAYOUT.washerBody.size_h_m / 2,
+        WORKCELL_LAYOUT.washerBody.center_y_m
+    );
+    returnChute.position.set(
+        WORKCELL_LAYOUT.returnChute.center_x_m,
+        WORKCELL_LAYOUT.returnChute.size_h_m / 2,
+        WORKCELL_LAYOUT.returnChute.center_y_m
+    );
+    placeAtPose(washerLoadMarker, WORKCELL_LAYOUT.washerLoad, 0.006);
+    placeAtPose(washerReturnMarker, WORKCELL_LAYOUT.washerReturn, 0.006);
+
+    const mapPose = (pose) => ({
+        x: asNumber(pose.x_m, 0),
+        y: asNumber(pose.z_m, 0.3),
+        z: asNumber(pose.y_m, 0)
+    });
+    const deg2rad = (d) => asNumber(d, 0) * Math.PI / 180;
+
+    let runtimeFailed = false;
+    const disableOnRuntimeError = (err) => {
+        if (runtimeFailed) return;
+        runtimeFailed = true;
+        console.error('3D runtime error:', err);
+        set3DNotice(
+            '3D workspace disabled',
+            `Runtime error. Dashboard controls and WS remain active. ${err?.message || String(err)}`,
+            'error'
+        );
+        try { renderer.domElement.style.opacity = '0.2'; } catch (_) {}
+    };
+
+    return {
+        ready: true,
+        updateScene(data) {
+            if (runtimeFailed) return;
+            try {
+                const rp = data.robot_pose || {};
+                const mapped = mapPose(rp);
+                ee.position.set(mapped.x, mapped.y + 0.045, mapped.z);
+                ee.rotation.set(
+                    deg2rad(rp.roll_deg),
+                    deg2rad(rp.yaw_deg),
+                    deg2rad(rp.pitch_deg)
+                );
+
+                const tp = data.target_pose || {};
+                tray.position.set(asNumber(tp.x_m, WORKCELL_LAYOUT.dirtyRack.x_m), 0.01, asNumber(tp.y_m, WORKCELL_LAYOUT.dirtyRack.y_m));
+                marker.position.set(asNumber(tp.x_m, WORKCELL_LAYOUT.dirtyRack.x_m), 0.08, asNumber(tp.y_m, WORKCELL_LAYOUT.dirtyRack.y_m));
+
+                const pp = data.place_pose || {};
+                placeZone.position.set(asNumber(pp.x_m, WORKCELL_LAYOUT.washerLoad.x_m), 0.01, asNumber(pp.y_m, WORKCELL_LAYOUT.washerLoad.y_m));
+
+                const dims = data.payload?.dims_m || {};
+                const dx = Math.max(0.12, asNumber(dims.x_m, TRAY_BASE_DIMS.x_m));
+                const dy = Math.max(0.08, asNumber(dims.y_m, TRAY_BASE_DIMS.y_m));
+                const dz = Math.max(0.012, asNumber(dims.z_m, TRAY_BASE_DIMS.z_m));
+                tray.scale.set(dx / TRAY_BASE_DIMS.x_m, dz / TRAY_BASE_DIMS.z_m, dy / TRAY_BASE_DIMS.y_m);
+                tray.position.y = dz / 2;
+                marker.position.y = dz + 0.05;
+                tray.material.color.setHex(data.payload?.is_clean ? 0x22c55e : 0xf59e0b);
+                placeZone.material.color.setHex(data.payload?.is_clean ? 0x22c55e : 0x86efac);
+
+                const washerBusy = !!data.washer?.busy;
+                washerBody.material.color.setHex(washerBusy ? 0x60a5fa : 0x94a3b8);
+                washerLoadMarker.material.color.setHex(washerBusy ? 0x1d4ed8 : 0x38bdf8);
+                washerReturnMarker.material.color.setHex(data.washer?.done ? 0x22c55e : 0xf97316);
+
+                const vac = !!data.grip?.vacuum_on;
+                const sealed = !!data.grip?.sealed;
+                for (const c of cups) {
+                    c.material.color.setHex(sealed ? 0x22c55e : (vac ? 0xf59e0b : 0x0f172a));
+                }
+
+                const from = new THREE.Vector3(0, 0.72, 0);
+                const to = new THREE.Vector3().copy(ee.position);
+                armLine.geometry.setFromPoints([from, to]);
+            } catch (err) {
+                disableOnRuntimeError(err);
+            }
+        },
+        renderFrame() {
+            if (runtimeFailed) return;
+            try {
+                controls.update();
+                renderer.render(scene, camera);
+            } catch (err) {
+                disableOnRuntimeError(err);
+            }
+        },
+        resize() {
+            if (runtimeFailed) return;
+            try {
+                const nextW = Math.max(1, w());
+                const nextH = Math.max(1, h());
+                camera.aspect = nextW / nextH;
+                camera.updateProjectionMatrix();
+                renderer.setSize(nextW, nextH);
+            } catch (err) {
+                disableOnRuntimeError(err);
+            }
+        }
+    };
+}
+
+async function initThreeSubsystem() {
+    set3DNotice('Loading 3D workspace...', 'If loading fails, dashboard controls, WS and logs will continue to work.', 'info');
+
+    try {
+        const THREE = await import(THREE_MODULE_URL);
+        const controlsModule = await import(ORBIT_CONTROLS_URL);
+        const OrbitControls = controlsModule.OrbitControls;
+        if (!OrbitControls) {
+            throw new Error('OrbitControls export not found');
+        }
+
+        threeApp = buildThreeApp(THREE, OrbitControls);
+        clear3DNotice();
+    } catch (err) {
+        console.error('3D initialization failed:', err);
+        init3DFallback('Failed to load or initialize three.js scene', err);
+    }
+}
+
+// ============ Fallback Simulator ============
+let t0 = performance.now();
+let simState = "IDLE";
+let simTimer = 0;
+let simFailOnce = true;
+
+function lerp(a, b, s) { return a + (b - a) * s; }
+function asNumber(value, fallback = 0) {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : fallback;
+}
+
+const safePos = { x_m: 0, y_m: 0, z_m: 0.3 };
+let simEePos = { ...safePos };
+let simTarget = { x_m: WORKCELL_LAYOUT.dirtyRack.x_m, y_m: WORKCELL_LAYOUT.dirtyRack.y_m, z_m: 0 };
+let simPlace = { x_m: WORKCELL_LAYOUT.washerLoad.x_m, y_m: WORKCELL_LAYOUT.washerLoad.y_m, z_m: 0.05 };
+
+function stepSim(dt) {
+    simTimer += dt;
+
+    const moveToward = (goal, speed = 0.5) => {
+        const dx = goal.x_m - simEePos.x_m;
+        const dy = goal.y_m - simEePos.y_m;
+        const dz = goal.z_m - simEePos.z_m;
+        const dist = Math.hypot(dx, dy, dz);
+        if (dist < 0.005) return true;
+        const step = Math.min(speed * dt, dist);
+        simEePos.x_m += dx / dist * step;
+        simEePos.y_m += dy / dist * step;
+        simEePos.z_m += dz / dist * step;
+        return false;
+    };
+
+    const pre3 = { x_m: simTarget.x_m, y_m: simTarget.y_m, z_m: 0.25 };
+    const contact3 = { x_m: simTarget.x_m, y_m: simTarget.y_m, z_m: 0.02 };
+    const lift3 = { x_m: simTarget.x_m, y_m: simTarget.y_m, z_m: 0.20 };
+    const placePre3 = { x_m: simPlace.x_m, y_m: simPlace.y_m, z_m: 0.20 };
+    const placeDown3 = { x_m: simPlace.x_m, y_m: simPlace.y_m, z_m: 0.05 };
+
+    // State machine
+    if (simState === "IDLE") {
+        latest.state = "IDLE";
+        latest.grip = { vacuum_on: false, sealed: false };
+        moveToward(safePos);
+    } else if (simState === "SCAN") {
+        latest.state = "DETECTING_TARGET";
+        latest.vision = { detected: true, confidence: 0.85 + 0.1 * Math.sin(performance.now() / 500) };
+        const sweep = { x_m: 0.1 * Math.sin(performance.now() / 800), y_m: 0.1 * Math.cos(performance.now() / 900), z_m: 0.3 };
+        moveToward(sweep);
+        if (latest.vision.confidence > 0.9 && simTimer > 1) {
+            simState = "PREGRASP";
+            simTimer = 0;
+        }
+    } else if (simState === "PREGRASP") {
+        latest.state = "MOVING_TO_PREGRASP";
+        latest.grip = { vacuum_on: false, sealed: false };
+        if (moveToward(pre3)) {
+            simState = "DESCEND";
+            simTimer = 0;
+        }
+    } else if (simState === "DESCEND") {
+        latest.state = "DESCENDING_TO_CONTACT";
+        if (moveToward(contact3, 0.2)) {
+            latest.grip = { vacuum_on: true, sealed: false };
+            if (simTimer > 0.5) {
+                if (simFailOnce) {
+                    simFailOnce = false;
+                    simState = "RECOVERY";
+                } else {
+                    latest.grip.sealed = true;
+                    simState = "LIFT";
+                }
+                simTimer = 0;
+            }
+        }
+    } else if (simState === "LIFT") {
+        latest.state = "LIFT_VERIFICATION";
+        latest.grip = { vacuum_on: true, sealed: true };
+        if (moveToward(lift3)) {
+            simState = "MOVE_PLACE";
+            simTimer = 0;
+        }
+    } else if (simState === "MOVE_PLACE") {
+        latest.state = "TRANSPORT_MONITORING";
+        latest.grip = { vacuum_on: true, sealed: true };
+        if (moveToward(placePre3)) {
+            simState = "PLACE_DOWN";
+            simTimer = 0;
+        }
+    } else if (simState === "PLACE_DOWN") {
+        latest.state = "MOVING_TO_PLACE";
+        if (moveToward(placeDown3, 0.2)) {
+            latest.grip = { vacuum_on: false, sealed: false };
+            simState = "RELEASE";
+            simTimer = 0;
+        }
+    } else if (simState === "RELEASE") {
+        latest.state = "RELEASING_LOAD";
+        latest.grip = { vacuum_on: false, sealed: false };
+        if (simTimer > 0.5) {
+            simState = "RETURN";
+            simTimer = 0;
+        }
+    } else if (simState === "RETURN") {
+        latest.state = "RETURNING_HOME";
+        if (moveToward(safePos)) {
+            latest.success_count++;
+            simState = "IDLE";
+            simTimer = 0;
+            simFailOnce = true;
+        }
+    } else if (simState === "RECOVERY") {
+        latest.state = "AUTO_RECOVERY_MODE";
+        latest.fault = { active: true, code: "SEAL_FAIL", msg: "Recovery in progress" };
+        if (simTimer > 0.5) {
+            latest.grip = { vacuum_on: false, sealed: false };
+        }
+        if (simTimer > 1.5) {
+            const up = { x_m: simEePos.x_m, y_m: simEePos.y_m, z_m: 0.35 };
+            if (moveToward(up)) {
+                latest.fault = { active: false, code: "", msg: "" };
+                latest.recover_count++;
+                simState = "SCAN";
+                simTimer = 0;
+            }
+        }
+    }
+
+    latest.robot_pose = { ...simEePos, roll_deg: 0, pitch_deg: 90, yaw_deg: 0 };
+    latest.target_pose = simTarget;
+    latest.place_pose = simPlace;
+}
+
+// ============ WebSocket ============
+function connectWebSocket() {
+    const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${protocol}//${location.host}/ws`;
+
+    try {
+        ws = new WebSocket(wsUrl);
+
+        ws.onopen = () => {
+            console.log('WebSocket connected');
+            reconnectAttempts = 0;
+            wsIndicator.classList.remove('bg-red-500', 'bg-yellow-500', 'animate-pulse-slow');
+            wsIndicator.classList.add('bg-emerald-500');
+            wsStatus.textContent = 'Connected';
+
+            if (wsPingTimer) {
+                clearInterval(wsPingTimer);
+            }
+            wsPingTimer = setInterval(() => {
+                if (ws.readyState === WebSocket.OPEN) {
+                    ws.send('ping');
+                }
+            }, 30000);
+        };
+
+        ws.onclose = () => {
+            console.log('WebSocket disconnected');
+            if (wsPingTimer) {
+                clearInterval(wsPingTimer);
+                wsPingTimer = null;
+            }
+            wsIndicator.classList.remove('bg-emerald-500', 'bg-yellow-500');
+            wsIndicator.classList.add('bg-red-500');
+            wsStatus.textContent = 'Disconnected';
+
+            const delay = reconnectDelays[Math.min(reconnectAttempts, reconnectDelays.length - 1)];
+            reconnectAttempts++;
+            wsStatus.textContent = `Reconnecting in ${delay / 1000}s...`;
+            wsIndicator.classList.remove('bg-red-500');
+            wsIndicator.classList.add('bg-yellow-500', 'animate-pulse-slow');
+
+            setTimeout(connectWebSocket, delay);
+        };
+
+        ws.onerror = (err) => {
+            console.error('WebSocket error:', err);
+        };
+
+        ws.onmessage = (event) => {
+            try {
+                if (typeof event.data !== 'string' || !event.data.trim().startsWith('{')) {
+                    return;
+                }
+                const data = JSON.parse(event.data);
+                latest = {
+                    ...latest,
+                    ...data,
+                    robot_pose: { ...(latest.robot_pose || {}), ...(data.robot_pose || {}) },
+                    target_pose: { ...(latest.target_pose || {}), ...(data.target_pose || {}) },
+                    place_pose: { ...(latest.place_pose || {}), ...(data.place_pose || {}) },
+                    vision: { ...(latest.vision || {}), ...(data.vision || {}) },
+                    grip: { ...(latest.grip || {}), ...(data.grip || {}) },
+                    fault: { ...(latest.fault || {}), ...(data.fault || {}) },
+                    conveyor: { ...(latest.conveyor || {}), ...(data.conveyor || {}) },
+                    vacuum: { ...(latest.vacuum || {}), ...(data.vacuum || {}) },
+                    robot: { ...(latest.robot || {}), ...(data.robot || {}) },
+                    task: { ...(latest.task || {}), ...(data.task || {}) },
+                    safety: { ...(latest.safety || {}), ...(data.safety || {}) },
+                    payload: { ...(latest.payload || {}), ...(data.payload || {}) },
+                    washer: { ...(latest.washer || {}), ...(data.washer || {}) }
+                };
+            } catch (e) {
+                console.error('Failed to parse message:', e);
+            }
+        };
+    } catch (e) {
+        ws = null;
+    }
+}
+
+// ============ UI Update ============
+function setStatusText(el, ok, okText, badText) {
+    if (!el) return;
+    el.textContent = ok ? okText : badText;
+    el.className = ok ? 'text-emerald-400' : 'text-red-400';
+}
+
+function updateUI() {
+    // State
+    stateDisplay.textContent = latest.state;
+    updateStateColor(latest.state);
+    hudStateText.textContent = latest.state;
+
+    // Vacuum
+    if (latest.vacuum_kpa !== null) {
+        vacuumKpa.textContent = `${asNumber(latest.vacuum_kpa).toFixed(1)} kPa`;
+    } else {
+        vacuumKpa.textContent = '-- kPa';
+    }
+
+    if (latest.vacuum_ok) {
+        vacuumIndicator.classList.remove('bg-slate-600', 'bg-red-500');
+        vacuumIndicator.classList.add('bg-emerald-500');
+    } else {
+        vacuumIndicator.classList.remove('bg-slate-600', 'bg-emerald-500');
+        vacuumIndicator.classList.add('bg-red-500');
+    }
+
+    // Counters
+    counterSuccess.textContent = latest.success_count;
+    counterRetry.textContent = latest.retry_count;
+    counterRecover.textContent = latest.recover_count;
+
+    // Last event
+    lastEvent.textContent = latest.last_event || '--';
+
+    // Robot position
+    if (latest.robot_pose) {
+        document.getElementById('robot-x').textContent = asNumber(latest.robot_pose.x_m).toFixed(3);
+        document.getElementById('robot-y').textContent = asNumber(latest.robot_pose.y_m).toFixed(3);
+        document.getElementById('robot-z').textContent = asNumber(latest.robot_pose.z_m, 0.3).toFixed(3);
+    }
+
+    // Vision
+    if (latest.vision) {
+        document.getElementById('vision-detected').textContent = latest.vision.detected ? 'Yes' : 'No';
+        document.getElementById('vision-detected').className = latest.vision.detected ? 'text-emerald-400' : 'text-slate-300';
+        document.getElementById('vision-confidence').textContent = asNumber(latest.vision.confidence).toFixed(2);
+    }
+
+    if (taskPhaseEl) {
+        taskPhaseEl.textContent = latest.task?.phase || 'WAITING';
+        taskPhaseEl.className = latest.task?.paused ? 'text-amber-300' : 'text-cyan-300';
+    }
+    setStatusText(statusPythonEl, !latest.fault?.active || latest.fault?.code !== 'PYTHON_EXEC_OFFLINE', 'ONLINE', 'OFFLINE');
+    setStatusText(statusRobotEl, !!latest.robot?.connected, latest.robot?.mode || 'CONNECTED', latest.robot?.mode || 'DISCONNECTED');
+    setStatusText(statusCameraEl, !!latest.vision?.camera_ok, 'OK', 'NO SIGNAL');
+    setStatusText(statusConveyorEl, !!latest.conveyor?.ready, latest.conveyor?.running_fb ? 'RUN' : 'READY', 'NOT READY');
+    setStatusText(statusWasherEl, !latest.washer?.busy, latest.washer?.done ? 'DONE' : 'IDLE', `BUSY ${Math.ceil(asNumber(latest.washer?.remaining_s, 0))}s`);
+    if (payloadLabelEl) {
+        payloadLabelEl.textContent = latest.payload?.label || latest.payload?.kind || '--';
+        payloadLabelEl.className = latest.payload?.is_clean ? 'text-emerald-300' : 'text-amber-300';
+    }
+
+    // Grip
+    if (latest.grip) {
+        document.getElementById('grip-vacuum').textContent = latest.grip.vacuum_on ? 'ON' : 'OFF';
+        document.getElementById('grip-vacuum').className = latest.grip.vacuum_on ? 'text-amber-400' : 'text-slate-300';
+        document.getElementById('grip-sealed').textContent = latest.grip.sealed ? 'YES' : 'NO';
+        document.getElementById('grip-sealed').className = latest.grip.sealed ? 'text-emerald-400' : 'text-slate-300';
+    }
+
+    // HUD
+    hudVision.textContent = latest.vision?.detected ? `${(latest.vision.confidence || 0).toFixed(2)}` : 'lost';
+    hudVac.textContent = latest.grip?.vacuum_on ? 'ON' : 'OFF';
+    hudSeal.textContent = latest.grip?.sealed ? 'SEALED' : 'NO';
+
+    // Logs
+    renderLogs(latest.log);
 }
 
 function updateStateColor(state) {
-  const colors = {
-    IDLE: 'text-slate-400', DETECTING_TARGET: 'text-blue-400', PLANNING_APPROACH: 'text-blue-400', MOVING_TO_PREGRASP: 'text-cyan-400',
-    DESCENDING_TO_CONTACT: 'text-cyan-400', PRE_SUCTION_CHECK: 'text-amber-400', LIFT_VERIFICATION: 'text-amber-400', TRANSPORT_MONITORING: 'text-emerald-400',
-    MOVING_TO_PLACE: 'text-emerald-400', RELEASING_LOAD: 'text-purple-400', RETURNING_HOME: 'text-purple-400', AUTO_RETRYING_GRASP: 'text-yellow-400',
-    AUTO_RECOVERY_MODE: 'text-orange-400', FAULT_LATCHED: 'text-red-500'
-  };
-  stateDisplay.className = 'text-3xl font-mono font-bold ' + (colors[state] || 'text-slate-400');
+    const colors = {
+        'IDLE': 'text-slate-400',
+        'DETECTING_TARGET': 'text-blue-400',
+        'PLANNING_APPROACH': 'text-blue-400',
+        'MOVING_TO_PREGRASP': 'text-cyan-400',
+        'DESCENDING_TO_CONTACT': 'text-cyan-400',
+        'PRE_SUCTION_CHECK': 'text-amber-400',
+        'LIFT_VERIFICATION': 'text-amber-400',
+        'TRANSPORT_MONITORING': 'text-emerald-400',
+        'MOVING_TO_PLACE': 'text-emerald-400',
+        'RELEASING_LOAD': 'text-purple-400',
+        'RETURNING_HOME': 'text-purple-400',
+        'AUTO_RETRYING_GRASP': 'text-yellow-400',
+        'AUTO_RECOVERY_MODE': 'text-orange-400',
+        'FAULT_LATCHED': 'text-red-500'
+    };
+    stateDisplay.className = 'text-3xl font-mono font-bold ' + (colors[state] || 'text-slate-400');
+
+    // HUD color
+    const hudColors = {
+        'IDLE': '#94a3b8',
+        'DETECTING_TARGET': '#60a5fa',
+        'PLANNING_APPROACH': '#60a5fa',
+        'MOVING_TO_PREGRASP': '#22d3ee',
+        'DESCENDING_TO_CONTACT': '#22d3ee',
+        'PRE_SUCTION_CHECK': '#fbbf24',
+        'LIFT_VERIFICATION': '#fbbf24',
+        'TRANSPORT_MONITORING': '#34d399',
+        'MOVING_TO_PLACE': '#34d399',
+        'RELEASING_LOAD': '#a78bfa',
+        'RETURNING_HOME': '#a78bfa',
+        'AUTO_RETRYING_GRASP': '#facc15',
+        'AUTO_RECOVERY_MODE': '#fb923c',
+        'FAULT_LATCHED': '#ef4444'
+    };
+    hudStateText.style.color = hudColors[state] || '#94a3b8';
 }
 
 function renderLogs(logs) {
-  const logContainer = $('log-container');
-  if (!logs || logs.length === 0) {
-    logContainer.innerHTML = '<div class="text-slate-500">No logs yet...</div>';
-    return;
-  }
-  logContainer.innerHTML = logs.slice(-30).map(log => {
-    const cls = log.level === 'ERROR' ? 'log-error' : (log.level === 'WARN' ? 'log-warn' : 'log-info');
-    const t = new Date(log.ts * 1000).toLocaleTimeString();
-    return `<div class="${cls}">[${t}] ${log.code}: ${log.msg}</div>`;
-  }).join('');
-  logContainer.scrollTop = logContainer.scrollHeight;
-}
-
-function updateUI(data) {
-  stateDisplay.textContent = data.state;
-  $('hudStateText').textContent = data.state;
-  updateStateColor(data.state);
-
-  vacuumKpa.textContent = typeof data.vacuum_kpa === 'number' ? `${data.vacuum_kpa.toFixed(1)} kPa` : '-- kPa';
-  if (data.vacuum_ok) {
-    vacuumIndicator.classList.remove('bg-slate-600', 'bg-red-500');
-    vacuumIndicator.classList.add('bg-emerald-500');
-  } else {
-    vacuumIndicator.classList.remove('bg-slate-600', 'bg-emerald-500');
-    vacuumIndicator.classList.add('bg-red-500');
-  }
-
-  $('counter-success').textContent = data.success_count;
-  $('counter-retry').textContent = data.retry_count;
-  $('counter-recover').textContent = data.recover_count;
-  $('last-event').textContent = data.last_event || '--';
-
-  if (data.robot_pose) {
-    $('robot-x').textContent = data.robot_pose.x_m.toFixed(3);
-    $('robot-y').textContent = data.robot_pose.y_m.toFixed(3);
-    $('robot-z').textContent = data.robot_pose.z_m.toFixed(3);
-  }
-
-  $('vision-detected').textContent = data.vision?.detected ? 'Yes' : 'No';
-  $('vision-confidence').textContent = Number(data.vision?.confidence || 0).toFixed(2);
-  $('grip-vacuum').textContent = data.grip?.vacuum_on ? 'ON' : 'OFF';
-  $('grip-sealed').textContent = data.grip?.sealed ? 'YES' : 'NO';
-
-  $('hudVision').textContent = data.vision?.detected ? Number(data.vision.confidence || 0).toFixed(2) : 'lost';
-  $('hudVac').textContent = data.grip?.vacuum_on ? 'ON' : 'OFF';
-  $('hudSeal').textContent = data.grip?.sealed ? 'SEALED' : 'NO';
-
-  renderLogs(data.log || []);
-}
-
-let ws = null;
-let reconnectAttempts = 0;
-const reconnectDelays = [1000, 2000, 4000, 8000, 10000];
-
-function connectWebSocket() {
-  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  ws = new WebSocket(`${protocol}//${location.host}/ws`);
-
-  ws.onopen = () => {
-    reconnectAttempts = 0;
-    wsIndicator.classList.remove('bg-red-500', 'bg-yellow-500', 'animate-pulse-slow');
-    wsIndicator.classList.add('bg-emerald-500');
-    wsStatus.textContent = 'Connected';
-  };
-
-  ws.onclose = () => {
-    const delay = reconnectDelays[Math.min(reconnectAttempts, reconnectDelays.length - 1)];
-    reconnectAttempts += 1;
-    wsIndicator.classList.remove('bg-emerald-500');
-    wsIndicator.classList.add('bg-yellow-500', 'animate-pulse-slow');
-    wsStatus.textContent = `Reconnecting in ${delay / 1000}s...`;
-    setTimeout(connectWebSocket, delay);
-  };
-
-  ws.onmessage = (e) => {
-    try { latest = JSON.parse(e.data); } catch (_) {}
-  };
-}
-
-async function apiCall(endpoint) {
-  try { await fetch(endpoint, { method: 'POST' }); } catch (e) { console.error(e); }
-}
-
-// Fallback joint-angle simulation
-let simState = 'IDLE';
-let simTimer = 0;
-let simJ = [0, -1.1, 1.6, 0.6, 1.57, 0];
-let simFaultUsed = false;
-const simPoses = {
-  SAFE: [0.0, -1.1, 1.6, 0.6, 1.57, 0.0],
-  SCAN: [0.35, -1.05, 1.45, 0.7, 1.57, 0.25],
-  PREGRASP: [0.25, -1.25, 1.85, 0.45, 1.57, 0.30],
-  CONTACT: [0.25, -1.52, 2.10, 0.25, 1.57, 0.30],
-  LIFT: [0.25, -1.15, 1.70, 0.55, 1.57, 0.30],
-  TRANSPORT: [-0.40, -1.00, 1.30, 0.90, 1.57, -0.55],
-  PLACE_PRE: [-0.80, -1.08, 1.42, 0.75, 1.57, -0.80],
-  PLACE_DOWN: [-0.80, -1.33, 1.78, 0.46, 1.57, -0.80],
-  RECOVERY_UP: [0.0, -0.85, 1.15, 1.05, 1.57, 0.0],
-};
-
-function stepJointLerp(curr, target, dt, speed = 1.2) {
-  const maxStep = speed * dt;
-  for (let i = 0; i < 6; i++) {
-    const err = target[i] - curr[i];
-    if (Math.abs(err) <= maxStep) curr[i] = target[i]; else curr[i] += err > 0 ? maxStep : -maxStep;
-  }
-}
-
-function stepFallback(dt) {
-  simTimer += dt;
-  const pose = (name) => simPoses[name];
-
-  if (simState === 'IDLE') {
-    stepJointLerp(simJ, pose('SAFE'), dt);
-    latest.state = 'IDLE';
-    latest.grip = { vacuum_on: false, sealed: false };
-  } else if (simState === 'SCAN') {
-    stepJointLerp(simJ, pose('SCAN'), dt);
-    latest.state = 'DETECTING_TARGET';
-    latest.vision = { detected: true, confidence: 0.86 + 0.12 * Math.abs(Math.sin(performance.now() / 500)) };
-    if (simTimer > 1.0) { simState = 'PRE'; simTimer = 0; }
-  } else if (simState === 'PRE') {
-    stepJointLerp(simJ, pose('PREGRASP'), dt);
-    latest.state = 'MOVING_TO_PREGRASP';
-    if (simTimer > 1.0) { simState = 'DESC'; simTimer = 0; }
-  } else if (simState === 'DESC') {
-    stepJointLerp(simJ, pose('CONTACT'), dt);
-    latest.state = 'DESCENDING_TO_CONTACT';
-    latest.grip = { vacuum_on: true, sealed: false };
-    if (simTimer > 0.8) {
-      if (!simFaultUsed) { simState = 'REC'; simFaultUsed = true; } else { simState = 'LIFT'; }
-      simTimer = 0;
+    if (!logs || logs.length === 0) {
+        logContainer.innerHTML = '<div class="text-slate-500">No logs yet...</div>';
+        return;
     }
-  } else if (simState === 'LIFT') {
-    stepJointLerp(simJ, pose('LIFT'), dt);
-    latest.state = 'LIFT_VERIFICATION';
-    latest.grip = { vacuum_on: true, sealed: true };
-    if (simTimer > 1.0) { simState = 'MOVE'; simTimer = 0; }
-  } else if (simState === 'MOVE') {
-    stepJointLerp(simJ, pose('TRANSPORT'), dt);
-    latest.state = 'TRANSPORT_MONITORING';
-    latest.grip = { vacuum_on: true, sealed: true };
-    if (simTimer > 1.0) { simState = 'PLACE'; simTimer = 0; }
-  } else if (simState === 'PLACE') {
-    stepJointLerp(simJ, pose('PLACE_PRE'), dt);
-    latest.state = 'MOVING_TO_PLACE';
-    if (simTimer > 1.0) { simState = 'RELEASE'; simTimer = 0; }
-  } else if (simState === 'RELEASE') {
-    stepJointLerp(simJ, pose('PLACE_DOWN'), dt);
-    latest.state = 'RELEASING_LOAD';
-    latest.grip = { vacuum_on: false, sealed: false };
-    if (simTimer > 0.8) { simState = 'RETURN'; simTimer = 0; }
-  } else if (simState === 'RETURN') {
-    stepJointLerp(simJ, pose('SAFE'), dt);
-    latest.state = 'RETURNING_HOME';
-    if (simTimer > 1.2) { simState = 'IDLE'; simTimer = 0; latest.success_count += 1; }
-  } else if (simState === 'REC') {
-    stepJointLerp(simJ, pose('RECOVERY_UP'), dt);
-    latest.state = 'AUTO_RECOVERY_MODE';
-    latest.fault = { active: true, code: 'VAC_SEAL_FAIL', msg: 'Auto recovery in progress' };
-    latest.grip = { vacuum_on: false, sealed: false };
-    if (simTimer > 1.2) { latest.fault = { active: false, code: '', msg: '' }; latest.recover_count += 1; simState = 'PRE'; simTimer = 0; }
-  }
 
-  latest.joint_angles_rad = simJ.map(v => Number(v.toFixed(4)));
+    const html = logs.slice(-30).map(log => {
+        const levelClass = log.level === 'ERROR' ? 'log-error' :
+            log.level === 'WARN' ? 'log-warn' : 'log-info';
+        const time = new Date(log.ts * 1000).toLocaleTimeString();
+        return `<div class="${levelClass}">[${time}] ${log.code}: ${log.msg}</div>`;
+    }).join('');
+
+    logContainer.innerHTML = html;
+    logContainer.scrollTop = logContainer.scrollHeight;
 }
 
-function applyRobotData() {
-  if (robot && latest.joint_angles_rad && latest.joint_angles_rad.length >= 6) {
-    JOINT_NAMES.forEach((name, i) => {
-      const j = robot.joints?.[name];
-      if (j && typeof j.setJointValue === 'function') j.setJointValue(latest.joint_angles_rad[i]);
-    });
-  }
-
-  const tp = latest.target_pose || { x_m: 0.35, y_m: 0.12, z_m: 0 };
-  tray.position.set(tp.x_m, 0.092, tp.y_m);
-  marker.position.set(tp.x_m, 0.15, tp.y_m);
-
-  const pp = latest.place_pose || { x_m: -0.25, y_m: 0.25, z_m: 0 };
-  placeZone.position.set(pp.x_m, 0.01, pp.y_m);
-
-  const vac = latest.grip?.vacuum_on;
-  const sealed = latest.grip?.sealed;
-  cups.forEach(c => c.material.color.setHex(sealed ? 0x22c55e : (vac ? 0xf59e0b : 0x0f172a)));
-}
-
-$('btn-start').addEventListener('click', () => {
-  if (!ws || ws.readyState !== WebSocket.OPEN) { simState = 'SCAN'; simTimer = 0; }
-  apiCall('/api/fsm/start');
-});
-$('btn-stop').addEventListener('click', () => {
-  if (!ws || ws.readyState !== WebSocket.OPEN) { simState = 'IDLE'; simTimer = 0; }
-  apiCall('/api/fsm/stop');
-});
-$('btn-reset').addEventListener('click', () => {
-  if (confirm('Reset FSM? This will clear all counters and return to IDLE.')) {
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
-      simState = 'IDLE'; simTimer = 0; simFaultUsed = false; simJ = simPoses.SAFE.slice();
-      latest.success_count = 0; latest.retry_count = 0; latest.recover_count = 0;
-    }
-    apiCall('/api/fsm/reset');
-  }
-});
-$('btn-fault-pre').addEventListener('click', () => { if (confirm('Inject fault: Next pre-suction check will fail?')) apiCall('/api/fault/next_pre_suction_fail'); });
-$('btn-fault-drop').addEventListener('click', () => { if (confirm('Inject fault: Drop object during next transport?')) apiCall('/api/fault/drop_once'); });
-$('btn-clear-log').addEventListener('click', () => apiCall('/api/log/clear'));
-
-let last = performance.now();
+// ============ Render Loop ============
+let lastTime = performance.now();
 function animate() {
-  requestAnimationFrame(animate);
-  const now = performance.now();
-  const dt = Math.min(0.05, (now - last) / 1000);
-  last = now;
+    requestAnimationFrame(animate);
 
-  if (!ws || ws.readyState !== WebSocket.OPEN) stepFallback(dt);
+    const now = performance.now();
+    const dt = Math.min(0.05, (now - lastTime) / 1000);
+    lastTime = now;
 
-  updateUI(latest);
-  applyRobotData();
+    // Fallback simulation if WS not connected
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+        stepSim(dt);
+    }
 
-  controls.update();
-  renderer.render(scene, camera);
+    // Update UI
+    updateUI();
+
+    // Update 3D scene
+    threeApp.updateScene(latest);
+    threeApp.renderFrame();
 }
+animate();
 
+// Resize handler
 window.addEventListener('resize', () => {
-  camera.aspect = container.clientWidth / container.clientHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(container.clientWidth, container.clientHeight);
+    threeApp.resize();
 });
 
-(async function init() {
-  try {
-    await loadRobotUrdf();
-  } catch (e) {
-    console.error('URDF load failed:', e);
-    const msg = document.createElement('div');
-    msg.style.cssText = 'position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#94a3b8;font:14px system-ui;background:rgba(2,6,23,.35);z-index:3;';
-    msg.textContent = 'URDF 加载失败，已切换 fallback joint 演示模式�?;
-    container.appendChild(msg);
-  }
-  connectWebSocket();
-  animate();
-})();
-</script>
+// Start button triggers sim
+document.getElementById('btn-start').addEventListener('click', () => {
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+        simState = "SCAN";
+        simTimer = 0;
+    }
+});
+
+// ============ API Calls ============
+async function apiCall(endpoint) {
+    try {
+        const response = await fetch(endpoint, { method: 'POST' });
+        const result = await response.json();
+        console.log('API response:', result);
+    } catch (err) {
+        console.error('API call failed:', err);
+    }
+}
+
+function confirmAction(message, callback) {
+    if (confirm(message)) {
+        callback();
+    }
+}
+
+// Event Listeners
+document.getElementById('btn-start').addEventListener('click', () => {
+    apiCall('/api/task/start_cycle');
+});
+
+document.getElementById('btn-stop').addEventListener('click', () => {
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+        simState = "IDLE";
+        simTimer = 0;
+    }
+    apiCall('/api/task/abort');
+});
+
+document.getElementById('btn-reset').addEventListener('click', () => {
+    confirmAction('Reset FSM? This will clear all counters and return to IDLE.', () => {
+        if (!ws || ws.readyState !== WebSocket.OPEN) {
+            simState = "IDLE";
+            simEePos = { ...safePos };
+            latest.success_count = 0;
+            latest.retry_count = 0;
+            latest.recover_count = 0;
+            simFailOnce = true;
+        }
+        apiCall('/api/fsm/reset');
+    });
+});
+
+document.getElementById('btn-fault-pre').addEventListener('click', () => {
+    confirmAction('Inject fault: Next pre-suction check will fail?', () => {
+        apiCall('/api/fault/next_pre_suction_fail');
+    });
+});
+
+document.getElementById('btn-fault-drop').addEventListener('click', () => {
+    confirmAction('Inject fault: Drop object during next transport?', () => {
+        apiCall('/api/fault/drop_once');
+    });
+});
+
+document.getElementById('btn-clear-log').addEventListener('click', () => {
+    apiCall('/api/log/clear');
+});
+
+if (cameraStreamEl) {
+    cameraStreamEl.addEventListener('error', () => {
+        cameraStreamEl.classList.add('hidden');
+        cameraStreamFallbackEl?.classList.remove('hidden');
+    });
+    cameraStreamEl.addEventListener('load', () => {
+        cameraStreamEl.classList.remove('hidden');
+        cameraStreamFallbackEl?.classList.add('hidden');
+    });
+}
+
+// Initialize
+initThreeSubsystem();
+connectWebSocket();
+    </script>
 </body>
 </html>

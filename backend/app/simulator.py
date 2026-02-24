@@ -37,6 +37,10 @@ class VisionSim:
         return {
             "detected": self._detected,
             "confidence": self._confidence,
+            "tag_id": 1 if self._detected else None,
+            "pose_valid": self._detected,
+            "camera_ok": True,
+            "source": "wrist_usb",
             "target_pose": {
                 "x_m": self.default_target.x,
                 "y_m": self.default_target.y,
@@ -227,6 +231,21 @@ class RobotSim:
             "pitch_deg": round(self.pitch, 1),
             "yaw_deg": round(self.yaw, 1)
         }
+
+    def get_joint_angles_rad(self) -> List[float]:
+        """Stable simulated 6-axis joint vector (placeholder, not IK-accurate)."""
+        x = self.x
+        y = self.y
+        z = self.z
+        j1 = math.atan2(y, x if abs(x) > 1e-6 else 1e-6)
+        z_norm = max(-1.0, min(1.0, (z - 0.2) / 0.2))
+        r_xy = math.hypot(x, y)
+        j2 = -1.1 + 0.5 * z_norm
+        j3 = 1.6 - 0.8 * min(1.0, r_xy / 0.5)
+        j4 = 0.6 + 0.3 * math.sin(x * 5.0)
+        j5 = 1.57 + 0.2 * math.cos(y * 5.0)
+        j6 = 0.2 * math.sin((x + y) * 6.0)
+        return [round(v, 4) for v in [j1, j2, j3, j4, j5, j6]]
 
     def is_at_goal(self, goal_pose: dict, threshold: float = 0.005) -> bool:
         """判断是否到达目标位置（阈值 5mm）"""

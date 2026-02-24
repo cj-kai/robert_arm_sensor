@@ -42,3 +42,8 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Gateway / local runtime state
+gateway/node_modules/
+gateway/dist/
+backend/data/

@@ -1,0 +1,8 @@
+.git
+.cursor
+**/__pycache__/
+*.pyc
+gateway/node_modules
+gateway/dist
+backend/data
+

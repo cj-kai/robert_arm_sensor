@@ -1,247 +1,259 @@
-# Vacuum Grasp Dashboard
+# CRX Tray Washer Simulation Dashboard
 
-真空抓取可靠性与自恢复模块 - 暗色工业控制台 Web Dashboard（3D可视化版本）
+用于演示 CRX 系列机械臂在托盘清洗工位中的流程仿真与调试界面（纯网页展示 + 后端仿真执行）。
 
-## 功能特性
+当前阶段重点：
 
-- **14状态FSM**: 完整的抓取流程状态机
-- **3D可视化**: three.js + URDFLoader 实时渲染 6 轴工业机械臂（CRX-20iA/L 风格）
-- **离线可用前端依赖**: three.js / OrbitControls / Tailwind / Chart.js 全部本地托管
-- **故障注入**: 支持预吸取失败、搬运掉压两种故障场景
-- **自动重试**: 3x3网格偏移重试（中心→四邻→四角）
-- **自动恢复**: 掉压检测后自动进入恢复模式
-- **实时监控**: WebSocket 每30ms推送状态
-- **暗色工业风格**: 专业控制台UI设计
+- 网页 Dashboard（静态 `index.html`）实时展示状态、日志、3D 场景
+- Python 执行层（FastAPI）运行 FSM 和仿真器
+- Node.js 网关（TypeScript）作为前端主入口，代理 API/WS，提升容错
+- 纯仿真流程覆盖：`脏盘架 -> 洗机上料 -> 洗机等待 -> 回流取盘 -> 净盘架`
+- 相机方案预留：腕部 USB 相机 + ArUco/AprilTag（当前为模拟状态）
 
-## 项目结构
+## 架构概览
 
-```
+- `frontend/index.html`
+  - 静态单页 Dashboard（不引入前端构建工具）
+  - three.js 3D 工位演示
+  - WebSocket 状态显示
+- `gateway/`
+  - Node.js + TypeScript 网关
+  - 对外提供 `/ws` 和 `/api/*`
+  - 代理 Python 执行层并在掉线时返回降级状态
+- `backend/`
+  - FastAPI 执行层
+  - FSM、模拟机器人/视觉/真空/传送带适配器
+  - 输出扩展状态（`joint_angles_rad`、`payload`、`washer` 等）
+
+## 当前仿真默认参数（已内置）
+
+- 相机工作距离：`0.40 m`（建议范围 `0.30 ~ 0.50 m`）
+- 视觉方案：`Aruco`（预留真实接入）
+- 洗机模型：`MIMASA DA-80`（仿真节拍默认 `12s`）
+- 托盘/箱体仿真（3种）
+  - `Square Tray 10.75"` (`0.273 x 0.273 x 0.0318 m`)
+  - `Rect Tray 11.125" x 7.75"` (`0.283 x 0.197 x 0.0191 m`)
+  - `Bin 16.625" x 11" x 5"` (`0.422 x 0.279 x 0.127 m`)
+
+## 目录结构
+
+```text
 robert_arm_sensor/
-├── backend/
-│   ├── app/
-│   │   ├── __init__.py
-│   │   ├── main.py          # FastAPI 入口
-│   │   ├── fsm.py           # 状态机核心
-│   │   ├── models.py        # 状态码/事件码枚举 + 数据模型
-│   │   ├── simulator.py     # 模拟器 (VisionSim/RobotSim/GripSim)
-│   │   └── ws_manager.py    # WebSocket管理
-│   ├── requirements.txt
-│   └── Dockerfile
-├── frontend/
-│   ├── index.html           # 单页应用 (URDF 3D工作区)
-│   ├── assets/robot/crx20ial/
-│   │   ├── robot.urdf       # 6轴机械臂 URDF 模型
-│   │   └── meshes/          # 可替换为真实 CRX meshes
-│   └── vendor/              # 本地前端依赖 (three/tailwind/chartjs/urdfloader)
-├── docker-compose.yml
-└── README.md
+├─ backend/
+│  ├─ app/
+│  │  ├─ main.py            # FastAPI 执行层（REST + WS）
+│  │  ├─ fsm.py             # FSM 与流程状态转换
+│  │  ├─ simulator.py       # Vision/Robot/Vacuum/Grip 模拟器
+│  │  ├─ adapters.py        # 适配器接口与模拟实现
+│  │  ├─ models.py          # 状态模型与 WS 载荷
+│  │  ├─ config_store.py    # JSON 配置（默认参数/运行时更新）
+│  │  └─ ws_manager.py      # WebSocket 管理
+│  ├─ Dockerfile
+│  └─ requirements.txt
+├─ gateway/
+│  ├─ src/index.ts          # Node 网关（API/WS 代理 + 静态页服务）
+│  ├─ Dockerfile
+│  ├─ package.json
+│  └─ tsconfig.json
+├─ frontend/
+│  ├─ index.html            # Dashboard + three.js 场景
+│  ├─ assets/               # 机器人/模型资源（可选）
+│  └─ vendor/               # three.js / URDFLoader（可选）
+├─ tools/
+│  └─ robot_assets/         # 官方 FANUC 资源下载脚本（骨架）
+├─ ops/
+│  └─ edge/                 # 边缘机部署说明（占位）
+├─ docker-compose.yml       # 默认使用 gateway + backend
+└─ README.md
 ```
 
-## 快速开始
+## 快速开始（推荐：Docker）
 
-### 前置要求
-
-- Docker & Docker Compose
-- Ubuntu 24.04 (推荐) 或其他 Linux 发行版
-
-### 1. 克隆仓库
-
-```bash
-git clone https://github.com/cj-kai/robert_arm_sensor.git
-cd robert_arm_sensor
-```
-
-### 2. 一键启动
+### 1. 启动
 
 ```bash
 docker compose up -d --build
 ```
 
-### 3. 访问 Dashboard
+### 2. 打开页面
 
-打开浏览器访问: `http://<服务器IP>:8000`
+- 本机：`http://127.0.0.1:8000/`
+- 云端：`http://<server-ip>:8000/`
 
-## 3D 工作区操作
+### 3. 基本操作
 
-| 操作 | 鼠标 |
-|------|------|
-| 旋转视角 | 左键拖拽 |
-| 缩放 | 滚轮 |
-| 平移 | 右键拖拽 |
+- `Start`：启动一轮流程（脏盘 -> 洗机 -> 回流 -> 净盘）
+- `Stop`：中止当前任务
+- `Reset`：复位状态和计数器
+- `Next Pre-Suction Fail`：注入“下次预吸失败”
+- `Drop Once During Transport`：注入“运输中掉落”
 
-## 坐标系映射说明（关键）
+## 本地开发运行（不使用 Docker）
 
-**后端（工业约定）**:
-- `x_m`: 左右方向
-- `y_m`: 前后方向
-- `z_m`: 高度方向
-
-**前端（three.js）**:
-- `three.x = x_m`（左右）
-- `three.y = z_m`（高度）
-- `three.z = y_m`（前后）
-
-> 这种映射是因为 three.js 默认 Y 轴为高度，而工业机器人通常使用 Z 轴为高度。前端在接收 WS 数据时自动完成映射。
-
-## Ubuntu 云端部署
-
-### 1. 安装 Docker
+### 方式 A：仅 Python 执行层（直连）
 
 ```bash
-# 更新包索引
-sudo apt update
-
-# 安装 Docker
-curl -fsSL https://get.docker.com | sh
-
-# 添加当前用户到 docker 组（可选，避免每次使用 sudo）
-sudo usermod -aG docker $USER
-newgrp docker
+cd backend
+pip install -r requirements.txt
+uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
-### 2. 开放端口
+说明：
+
+- 这种方式会使用 `backend` 直接服务静态页（`backend/Dockerfile` 会复制 `frontend` 到 `backend/static`）
+- 如果你本地直接运行 Python，建议优先使用下面的网关方式，保证和部署环境一致
+
+### 方式 B：Node 网关 + Python 执行层（与部署一致）
+
+终端 1（Python 执行层）：
 
 ```bash
-# 如果使用 ufw
-sudo ufw allow 8000/tcp
-sudo ufw reload
-
-# 如果使用云服务商防火墙，请在控制台开放 8000 端口
+cd backend
+pip install -r requirements.txt
+uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
-### 3. 部署应用
+终端 2（Node 网关）：
 
 ```bash
-# 克隆并启动
-git clone https://github.com/cj-kai/robert_arm_sensor.git
-cd robert_arm_sensor
-docker compose up -d --build
+cd gateway
+npm install
+$env:PYTHON_EXEC_BASE="http://127.0.0.1:8000"
+npm run start
 ```
 
-### 4. 验证部署
+访问：
 
-```bash
-# 检查容器状态
-docker compose ps
+- `http://127.0.0.1:8000/`（由网关提供前端页面）
 
-# 查看日志
-docker compose logs -f
-```
-
-## API 文档
-
-### REST API
-
-| 方法 | 路径 | 描述 |
-|------|------|------|
-| POST | `/api/fsm/start` | 启动 FSM |
-| POST | `/api/fsm/stop` | 停止 FSM |
-| POST | `/api/fsm/reset` | 重置 FSM |
-| POST | `/api/fault/next_pre_suction_fail` | 注入故障：下一次预吸取失败 |
-| POST | `/api/fault/drop_once` | 注入故障：搬运中掉压 |
-| POST | `/api/log/clear` | 清空日志 |
+## WebSocket 与 API（对前端）
 
 ### WebSocket
 
-- 端点: `/ws`
-- 推送频率: 50ms
-- 推送格式:
-```json
-{
-  "ts": 1708123456.789,
-  "state": "PRE_SUCTION_CHECK",
-  "vacuum_ok": true,
-  "vacuum_kpa": -52.3,
-  "retry_count": 0,
-  "recover_count": 0,
-  "success_count": 5,
-  "last_event": "VACUUM_ON",
-  "log": [...],
-  "robot_pose": {"x_m": 0.25, "y_m": 0.10, "z_m": 0.15, "roll_deg": 0, "pitch_deg": 90, "yaw_deg": 0},
-  "joint_angles_rad": [0.12, -1.20, 1.78, 0.52, 1.57, -0.31],
-  "target_pose": {"x_m": 0.35, "y_m": 0.12, "z_m": 0.0},
-  "place_pose": {"x_m": -0.25, "y_m": 0.25, "z_m": 0.05},
-  "vision": {"detected": true, "confidence": 0.92},
-  "grip": {"vacuum_on": true, "sealed": false},
-  "fault": {"active": false, "code": "", "msg": ""}
-}
+- `GET /ws`
+- 推送状态包含（已扩展）：
+  - `joint_angles_rad`
+  - `vision`
+  - `grip`
+  - `fault`
+  - `conveyor`
+  - `robot`
+  - `task`
+  - `payload`
+  - `washer`
+
+### 常用 API
+
+- `POST /api/task/start_cycle`
+- `POST /api/task/pause`
+- `POST /api/task/resume`
+- `POST /api/task/abort`
+- `POST /api/fsm/reset`
+- `POST /api/fault/next_pre_suction_fail`
+- `POST /api/fault/drop_once`
+- `POST /api/log/clear`
+- `GET /api/system/health`
+- `GET /api/config`
+- `PUT /api/config`
+- `GET /api/calibration/status`
+- `GET /api/camera/stream.mjpg`（仿真模式为占位 MJPEG）
+
+## 3D 场景说明
+
+当前场景已按托盘清洗工位布局做简化示意：
+
+- 左侧：脏盘架 / 净盘架
+- 中间：机械臂工作区
+- 右侧：洗机主体（DA-80 简化体块）+ 回流槽
+
+可视化特性：
+
+- 托盘尺寸根据 `payload.dims_m` 自动缩放
+- 托盘颜色区分脏/净状态
+- 洗机在处理阶段显示忙碌状态
+- 3D 初始化失败不会拖垮按钮、日志、WS（容错降级）
+
+## 故障注入与演示流程
+
+### 预吸失败（自动重试）
+
+1. 点击 `Next Pre-Suction Fail`
+2. 点击 `Start`
+3. 系统在 `PRE_SUCTION_CHECK` 失败后进入 `AUTO_RETRYING_GRASP`
+4. 执行偏移重试（3x3 网格策略）
+
+### 运输掉落（自动恢复）
+
+1. 点击 `Drop Once During Transport`
+2. 点击 `Start`
+3. 系统在运输阶段检测掉落
+4. 进入 `AUTO_RECOVERY_MODE` 并重新搜索/抓取（仿真）
+
+## 云端部署（推荐：离线打包上传）
+
+由于云端拉取 GitHub 可能不稳定，推荐本地打包上传。
+
+### 1. 本地打包
+
+Windows PowerShell（在仓库根目录）：
+
+```powershell
+tar -czf robert_arm_sensor_deploy.tar.gz `
+  --exclude=.git `
+  --exclude=.cursor `
+  --exclude=gateway/node_modules `
+  --exclude=gateway/dist `
+  --exclude=backend/data `
+  .
 ```
 
-## 状态码
+### 2. 上传到云端
 
-| 状态 | 描述 |
-|------|------|
-| IDLE | 空闲 |
-| DETECTING_TARGET | 检测目标 |
-| PLANNING_APPROACH | 规划接近路径 |
-| MOVING_TO_PREGRASP | 移动到预抓取位置 |
-| DESCENDING_TO_CONTACT | 下降到接触 |
-| PRE_SUCTION_CHECK | 预吸取检查 |
-| LIFT_VERIFICATION | 抬起验证 |
-| TRANSPORT_MONITORING | 搬运监控 |
-| MOVING_TO_PLACE | 移动到放置位置 |
-| RELEASING_LOAD | 释放负载 |
-| RETURNING_HOME | 返回原点 |
-| AUTO_RETRYING_GRASP | 自动重试抓取 |
-| AUTO_RECOVERY_MODE | 自动恢复模式 |
-| FAULT_LATCHED | 故障锁定 |
+示例（按你的用户名/路径替换）：
 
-## 3D 场景元素
+```bash
+scp robert_arm_sensor_deploy.tar.gz user@<server-ip>:/tmp/
+```
 
-| 元素 | 描述 |
-|------|------|
-| CRX 机械臂 | URDF 6 轴工业机械臂（按 joint_angles_rad 实时驱动） |
-| VGC10 末端 | 灰色方盒 + 10个吸盘（状态变色） |
-| 托盘 | 蓝色半透明（目标位置） |
-| 传送带 | 深色长条传送带（抓取区域） |
-| 货架 | 多层框架（放置区背景） |
-| 放置区 | 绿色半透明（放置位置） |
-| 标记球 | 红色（视觉检测点） |
+### 3. 云端解压并启动
 
-### 吸盘状态颜色
+```bash
+mkdir -p ~/apps/robert_arm_sensor
+tar -xzf /tmp/robert_arm_sensor_deploy.tar.gz -C ~/apps/robert_arm_sensor --strip-components=1
+cd ~/apps/robert_arm_sensor
+docker compose up -d --build
+docker compose ps
+```
 
-| 状态 | 颜色 |
-|------|------|
-| 关闭 | 深灰 (#0f172a) |
-| 真空开启 | 黄色 (#f59e0b) |
-| 密封成功 | 绿色 (#22c55e) |
+### 4. 验证
 
-## 故障注入测试流程
+```bash
+curl http://127.0.0.1:8000/api/system/health
+```
 
-### 测试预吸取失败 → 自动重试
+## GitHub 提交流程（建议）
 
-1. 点击 **Next Pre-Suction Fail**
-2. 点击 **Start**
-3. 观察 FSM 进入 AUTO_RETRYING_GRASP，进行3x3网格偏移重试
-4. 最多9次重试后进入 FAULT_LATCHED
+```bash
+git status
+git add .
+git commit -m "feat: add gateway + phase1 tray washer simulation flow"
+git push origin main
+```
 
-### 测试搬运掉压 → 自动恢复
+如果云端无法 `git pull`，继续使用“本地打包上传”的部署方式。
 
-1. 点击 **Drop Once During Transport**
-2. 点击 **Start**
-3. 观察 FSM 在 TRANSPORT_MONITORING 阶段检测到掉压
-4. 自动进入 AUTO_RECOVERY_MODE，回到 DETECTING_TARGET 重新开始
+## 后续真实接入（下一阶段）
 
-## 硬件替换
+本项目已预留以下方向，但当前版本仍以仿真为主：
 
-当硬件就绪时，只需替换以下文件：
+- FANUC CRX-20iA/L + `R-30iB Mini Plus`
+- FANUC ROS 2 Driver（边缘机 Ubuntu）
+- 腕部 USB 相机 + ArUco/AprilTag
+- 真空吸盘 IO（当前为模拟）
+- 传送带启停 IO（当前为模拟）
 
-- `backend/app/simulator.py` 中的 `VacuumSim` → 接入真实真空传感器
-- `backend/app/simulator.py` 中的 `RobotSim` → 接入真实机器人控制器
-- `backend/app/simulator.py` 中的 `VisionSim` → 接入 AruCo 或其他视觉系统
-- `backend/app/simulator.py` 中的 `GripSim` → 接入真实夹具控制器
+## 注意事项
 
-FSM 逻辑和 API 保持不变。
+- 你截图如果看不到 `Task & Links` / `Camera Debug`，通常是旧部署或浏览器缓存，请先强制刷新（`Ctrl+F5`）
+- 若 3D 区域空白但 UI 正常，查看浏览器 Console 是否有 three.js/CDN/WebGL 报错
 
-## 更换 URDF 机器人模型
-
-1. 将新模型资源放入 `frontend/assets/robot/<your_robot>/`，确保存在可访问的 `robot.urdf`。
-2. 若 URDF 使用 mesh，确保引用路径为浏览器可访问的相对路径（不要保留 `package://`）。
-3. 在 `frontend/index.html` 中修改加载路径：
-   - `loader.loadAsync('/static/assets/robot/<your_robot>/robot.urdf')`
-4. 按你的机器人关节名称更新 `JOINT_NAMES` 映射顺序。
-5. 后端继续输出 `joint_angles_rad:[q1..q6]` 即可驱动关节。
-
-## 许可证
-
-MIT License
