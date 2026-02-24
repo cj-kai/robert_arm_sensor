@@ -567,6 +567,32 @@ async function buildThreeApp(THREE, OrbitControls, URDFLoaderClass = null) {
     scene.add(trailLine);
     const trayVisualPos = tray.position.clone();
     const carryingStates = new Set(['LIFT_VERIFICATION', 'TRANSPORT_MONITORING', 'MOVING_TO_PLACE']);
+    let trayAttached = false;
+    let trayAttachBlend = 0;
+    let trayCycleId = '';
+    let trayLastFlowStage = 'DIRTY_TO_WASHER';
+
+    const sampleWasherReturnPath = (progress01, trayHeight) => {
+        const p = Math.max(0, Math.min(1, asNumber(progress01, 0)));
+        const centerY = Math.max(trayHeight / 2 + 0.01, WORKCELL_LAYOUT.washerLoad.z_m + trayHeight / 2);
+        const p0 = new THREE.Vector3(WORKCELL_LAYOUT.washerLoad.x_m, centerY, WORKCELL_LAYOUT.washerLoad.y_m);
+        const p1 = new THREE.Vector3(WORKCELL_LAYOUT.returnLoop.center_x_m, centerY, WORKCELL_LAYOUT.returnLoop.center_y_m + WORKCELL_LAYOUT.returnLoop.radius_m);
+        const p2 = new THREE.Vector3(WORKCELL_LAYOUT.returnLoop.center_x_m, centerY, WORKCELL_LAYOUT.returnLoop.center_y_m - WORKCELL_LAYOUT.returnLoop.radius_m);
+        const p3 = new THREE.Vector3(WORKCELL_LAYOUT.washerReturn.x_m, centerY, WORKCELL_LAYOUT.washerReturn.y_m);
+        if (p < 0.25) {
+            return p0.lerp(p1, p / 0.25);
+        }
+        if (p < 0.75) {
+            const t = (p - 0.25) / 0.50;
+            const theta = Math.PI / 2 - Math.PI * t; // upper -> lower through right arc
+            return new THREE.Vector3(
+                WORKCELL_LAYOUT.returnLoop.center_x_m + WORKCELL_LAYOUT.returnLoop.radius_m * Math.cos(theta),
+                centerY,
+                WORKCELL_LAYOUT.returnLoop.center_y_m + WORKCELL_LAYOUT.returnLoop.radius_m * Math.sin(theta)
+            );
+        }
+        return p2.lerp(p3, (p - 0.75) / 0.25);
+    };
 
     // Workcell layout helpers (dirty/clean racks, washer body, return chute)
     const rackMatDirty = new THREE.MeshStandardMaterial({ color: 0xef4444, roughness: 0.7, metalness: 0.05, transparent: true, opacity: 0.10 });
@@ -899,28 +925,72 @@ async function buildThreeApp(THREE, OrbitControls, URDFLoaderClass = null) {
                 const dz = Math.max(0.012, asNumber(dims.z_m, TRAY_BASE_DIMS.z_m));
                 tray.scale.set(dx / TRAY_BASE_DIMS.x_m, dz / TRAY_BASE_DIMS.z_m, dy / TRAY_BASE_DIMS.y_m);
                 const trayGoal = new THREE.Vector3();
-                const isCarrying = !!data.grip?.sealed || carryingStates.has(String(data.state || ''));
-                if (isCarrying) {
-                    const carrySide = eeWorld.x <= 0 ? 1 : -1;
-                    trayGoal.set(
-                        eeWorld.x + carrySide * (dx / 2 + 0.06),
-                        Math.max(dz / 2 + 0.01, eeWorld.y),
-                        eeWorld.z
-                    );
-                } else if (String(data.state || '') === 'RELEASING_LOAD' || !!data.washer?.busy || !!data.washer?.done) {
-                    trayGoal.set(
-                        asNumber(pp.x_m, WORKCELL_LAYOUT.washerLoad.x_m),
-                        dz / 2 + Math.max(0.0, asNumber(pp.z_m, WORKCELL_LAYOUT.washerLoad.z_m)),
-                        asNumber(pp.y_m, WORKCELL_LAYOUT.washerLoad.y_m)
-                    );
-                } else {
-                    trayGoal.set(
-                        asNumber(tp.x_m, WORKCELL_LAYOUT.dirtyRack.x_m),
-                        dz / 2 + Math.max(0.0, asNumber(tp.z_m, WORKCELL_LAYOUT.dirtyRack.z_m)),
-                        asNumber(tp.y_m, WORKCELL_LAYOUT.dirtyRack.y_m)
-                    );
+                const stateCode = String(data.state || '');
+                const flowStage = String(data.washer?.flow_stage || trayLastFlowStage || 'DIRTY_TO_WASHER');
+                trayLastFlowStage = flowStage;
+                const cycleId = String(data.task?.cycle_id || '');
+                if (cycleId !== trayCycleId) {
+                    trayCycleId = cycleId;
+                    trayAttached = false;
+                    trayAttachBlend = 0;
                 }
-                trayVisualPos.lerp(trayGoal, 0.22);
+                const targetGoal = new THREE.Vector3(
+                    asNumber(tp.x_m, WORKCELL_LAYOUT.dirtyRack.x_m),
+                    dz / 2 + Math.max(0.0, asNumber(tp.z_m, WORKCELL_LAYOUT.dirtyRack.z_m)),
+                    asNumber(tp.y_m, WORKCELL_LAYOUT.dirtyRack.y_m)
+                );
+                const placeGoal = new THREE.Vector3(
+                    asNumber(pp.x_m, WORKCELL_LAYOUT.washerLoad.x_m),
+                    dz / 2 + Math.max(0.0, asNumber(pp.z_m, WORKCELL_LAYOUT.washerLoad.z_m)),
+                    asNumber(pp.y_m, WORKCELL_LAYOUT.washerLoad.y_m)
+                );
+                const tcpTruth = new THREE.Vector3(mapped.x, mapped.y, mapped.z);
+                const eeForCarry = eeWorld.distanceTo(tcpTruth) < 0.45 ? eeWorld : tcpTruth;
+                const carrySideHint = targetGoal.x <= 0 ? 1 : -1;
+                const sideContactTruth = new THREE.Vector3(
+                    tcpTruth.x + carrySideHint * (dx / 2 + 0.06),
+                    Math.max(dz / 2 + 0.01, tcpTruth.y),
+                    tcpTruth.z
+                );
+                const pickupCloseEnough = sideContactTruth.distanceTo(targetGoal) < Math.max(0.14, Math.min(0.28, dx * 0.6));
+                const carryEligible = !!data.grip?.sealed && carryingStates.has(stateCode);
+
+                if (!trayAttached && carryEligible && pickupCloseEnough) {
+                    trayAttached = true;
+                    trayAttachBlend = 0;
+                }
+                if (trayAttached && !carryEligible) {
+                    trayAttached = false;
+                    trayAttachBlend = 0;
+                }
+
+                const washerBusy = !!data.washer?.busy;
+                const washerDone = !!data.washer?.done;
+                const washerProgress = (asNumber(data.washer?.cycle_time_s, 0) > 0)
+                    ? 1 - (asNumber(data.washer?.remaining_s, 0) / asNumber(data.washer?.cycle_time_s, 1))
+                    : 0;
+
+                if (trayAttached) {
+                    trayAttachBlend = Math.min(1, trayAttachBlend + 0.10);
+                    const carrySide = eeForCarry.x <= 0 ? 1 : -1;
+                    const carryGoal = new THREE.Vector3(
+                        eeForCarry.x + carrySide * (dx / 2 + 0.06),
+                        Math.max(dz / 2 + 0.01, eeForCarry.y),
+                        eeForCarry.z
+                    );
+                    trayGoal.copy(targetGoal).lerp(carryGoal, trayAttachBlend);
+                } else if (washerBusy || (flowStage === 'WASHER_PROCESS' && !washerDone)) {
+                    trayGoal.copy(sampleWasherReturnPath(washerProgress, dz));
+                } else if (washerDone && flowStage === 'WASHER_TO_CLEAN') {
+                    trayGoal.copy(targetGoal);
+                } else if (data.payload?.is_clean && stateCode === 'IDLE') {
+                    trayGoal.copy(placeGoal);
+                } else {
+                    trayGoal.copy(targetGoal);
+                }
+
+                const trayFollowAlpha = trayAttached ? 0.28 : (washerBusy ? 0.16 : 0.22);
+                trayVisualPos.lerp(trayGoal, trayFollowAlpha);
                 tray.position.copy(trayVisualPos);
 
                 const suctionOffsetX = (dz / 2 + 0.03) * (tray.position.x < 0 ? 1 : -1);
@@ -929,22 +999,22 @@ async function buildThreeApp(THREE, OrbitControls, URDFLoaderClass = null) {
                     tray.position.y + Math.max(0.05, dz * 0.6),
                     tray.position.z
                 );
-                marker.visible = !isCarrying;
+                const isCarrying = trayAttached;
+                marker.visible = !isCarrying && !washerBusy;
                 tray.material.color.setHex(data.payload?.is_clean ? 0x22c55e : 0xf59e0b);
                 placeZone.material.color.setHex(data.payload?.is_clean ? 0x22c55e : 0x86efac);
 
-                const goalPose = (carryingStates.has(String(data.state || '')) || String(data.state || '') === 'RELEASING_LOAD')
+                const goalPose = (trayAttached || stateCode === 'RELEASING_LOAD')
                     ? (data.place_pose || {})
                     : (data.target_pose || {});
                 const goalMapped = mapPose(goalPose);
                 goalMarker.position.set(goalMapped.x, Math.max(0.02, goalMapped.y), goalMapped.z);
-                goalMarker.material.color.setHex(carryingStates.has(String(data.state || '')) ? 0x22c55e : 0x38bdf8);
+                goalMarker.material.color.setHex(trayAttached ? 0x22c55e : 0x38bdf8);
                 goalLine.geometry.setFromPoints([
                     new THREE.Vector3(eeWorld.x, eeWorld.y, eeWorld.z),
                     new THREE.Vector3(goalMapped.x, Math.max(0.02, goalMapped.y), goalMapped.z)
                 ]);
 
-                const washerBusy = !!data.washer?.busy;
                 washerBody.material.color.setHex(washerBusy ? 0x60a5fa : 0x94a3b8);
                 washerLoadMarker.material.color.setHex(washerBusy ? 0x1d4ed8 : 0x38bdf8);
                 washerReturnMarker.material.color.setHex(data.washer?.done ? 0x22c55e : 0xf97316);
