@@ -1084,8 +1084,8 @@ async function buildThreeApp(THREE, OrbitControls, URDFLoaderClass = null) {
                 const isCarrying = trayAttached;
                 marker.visible = tray.visible && !isCarrying && !washerBusy;
                 const trayIsClean = hasBackendTrayPose ? !!backendTrayBody.is_clean : !!data.payload?.is_clean;
-                trayColorTarget.setHex(trayIsClean ? 0x22c55e : 0xf59e0b);
-                tray.material.color.lerp(trayColorTarget, 0.18);
+                trayColorTarget.setHex(0xf59e0b);
+                tray.material.color.lerp(trayColorTarget, 0.12);
                 placeZone.material.color.setHex(trayIsClean ? 0x22c55e : 0x86efac);
 
                 const goalPose = (trayAttached || stateCode === 'RELEASING_LOAD')

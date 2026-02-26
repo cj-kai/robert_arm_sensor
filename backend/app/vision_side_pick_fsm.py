@@ -753,12 +753,10 @@ class VisionGuidedSidePickFSM:
                 self._ik_warned = True
             return
 
-        # Mild smoothing reduces numerical IK jitter while preserving path response.
-        alpha = 0.45
-        self._joint_angles_rad = [
-            (1.0 - alpha) * old + alpha * new
-            for old, new in zip(self._joint_angles_rad, res.joints_rad)
-        ]
+        # The FSM trajectory is already time-interpolated in Cartesian space.
+        # Applying an extra low-pass filter in joint space introduces visual lag,
+        # causing "remote suction" and release teleport artifacts in the frontend.
+        self._joint_angles_rad = [float(v) for v in res.joints_rad]
 
     def _make_pose(self, pos: Vec3, quat: Quat) -> Pose:
         return Pose(pos.copy(), quat)
