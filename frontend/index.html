@@ -597,16 +597,19 @@ async function buildThreeApp(THREE, OrbitControls, URDFLoaderClass = null) {
         scene.updateMatrixWorld(true);
         ee.updateMatrixWorld(true);
         if (shouldAttach) {
-            ee.attach(tray); // preserve world transform while parenting to end-effector
-            // Force a clean local snap to the suction face so we do not keep the
-            // pre-attach world-space error (which looks like "remote suction").
-            const localSign = tray.position.x >= 0 ? 1 : -1;
+            // 先在世界坐标系下获取实际的 X 符号
+            const trayWorldPos = new THREE.Vector3();
+            tray.getWorldPosition(trayWorldPos);
+            const localSign = trayWorldPos.x >= 0 ? 1 : -1;
+
+            ee.attach(tray);
+
             tray.position.set(
                 VISUAL_SUCTION_CONTACT_X + localSign * (trayDimsCurrent.x / 2 + VISUAL_SUCTION_GAP),
                 0,
                 0
             );
-            tray.rotation.set(0, 0, 0);
+            tray.rotation.set(0, 0, 0); // 强行回正局部姿态
         } else {
             scene.attach(tray); // preserve world transform while returning to scene root
         }
@@ -954,10 +957,15 @@ async function buildThreeApp(THREE, OrbitControls, URDFLoaderClass = null) {
 
                 const tp = data.target_pose || {};
                 const pp = data.place_pose || {};
+
+                // 动态判断当前是在处理净盘还是脏盘
+                const isCleanNow = data.payload?.is_clean || false;
+                const fallbackLayout = isCleanNow ? WORKCELL_LAYOUT.cleanRack : WORKCELL_LAYOUT.washerLoad;
+
                 placeZone.position.set(
-                    asNumber(pp.x_m, WORKCELL_LAYOUT.washerLoad.x_m),
-                    Math.max(0.01, asNumber(pp.z_m, WORKCELL_LAYOUT.washerLoad.z_m) - 0.03),
-                    asNumber(pp.y_m, WORKCELL_LAYOUT.washerLoad.y_m)
+                    asNumber(pp.x_m, fallbackLayout.x_m),
+                    Math.max(0.01, asNumber(pp.z_m, fallbackLayout.z_m) - 0.03),
+                    asNumber(pp.y_m, fallbackLayout.y_m)
                 );
 
                 const backendTrayBody = data.tray_body || {};
@@ -993,9 +1001,9 @@ async function buildThreeApp(THREE, OrbitControls, URDFLoaderClass = null) {
                     asNumber(tp.y_m, WORKCELL_LAYOUT.dirtyRack.y_m)
                 );
                 const placeGoal = new THREE.Vector3(
-                    asNumber(pp.x_m, WORKCELL_LAYOUT.washerLoad.x_m),
-                    dz / 2 + Math.max(0.0, asNumber(pp.z_m, WORKCELL_LAYOUT.washerLoad.z_m)),
-                    asNumber(pp.y_m, WORKCELL_LAYOUT.washerLoad.y_m)
+                    asNumber(pp.x_m, fallbackLayout.x_m),
+                    dz / 2 + Math.max(0.0, asNumber(pp.z_m, fallbackLayout.z_m)),
+                    asNumber(pp.y_m, fallbackLayout.y_m)
                 );
                 const tcpTruth = new THREE.Vector3(mapped.x, mapped.y, mapped.z);
                 const eeForCarry = eeWorld.distanceTo(tcpTruth) < 0.45 ? eeWorld : tcpTruth;
@@ -1046,6 +1054,8 @@ async function buildThreeApp(THREE, OrbitControls, URDFLoaderClass = null) {
                         trayGoal.copy(targetGoal);
                     } else if (data.payload?.is_clean && stateCode === 'IDLE') {
                         trayGoal.copy(placeGoal);
+                    } else if (stateCode === 'MOVING_TO_PLACE' || stateCode === 'RELEASING_LOAD') {
+                        trayGoal.copy(placeGoal); // 放置阶段留在目标地，防止闪现回起点
                     } else {
                         trayGoal.copy(targetGoal);
                     }

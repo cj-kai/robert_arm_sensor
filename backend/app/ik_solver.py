@@ -85,6 +85,10 @@ class CRX20IkPySolver:
             index_map.append(found)
         return index_map
 
+    def reset_seed(self) -> None:
+        """Reset initial position to zero, preventing cumulative twist between FSM cycles."""
+        self._last_solution = np.zeros(len(self._chain.links), dtype=float)
+
     def solve_tcp_pose(
         self,
         xyz_m: Sequence[float],
@@ -106,4 +110,3 @@ class CRX20IkPySolver:
             return IKResult(True, joints)
         except Exception as exc:
             return IKResult(False, [0.0] * 6, f"ikpy solve failed: {exc}")
-

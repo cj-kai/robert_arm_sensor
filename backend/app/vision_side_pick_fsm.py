@@ -459,6 +459,9 @@ class VisionGuidedSidePickFSM:
     # ----- trajectory builders -----
 
     def _build_side_pick_segments(self, target: Vec3, tray: SimTray) -> list[TrajectorySegment]:
+        # FIXME/TODO: 当前 ikpy 未解出目标欧拉姿态，强制用归零种子打破每次扭曲姿势不同的累计误差。
+        if self._ik_solver is not None and hasattr(self._ik_solver, "reset_seed"):
+            self._ik_solver.reset_seed()
         # `target` is the detected tray side-center (not tray center) in world coordinates.
         q = self._side_pick_quat
         approach_sign = self._approach_sign_for_target(target)
@@ -498,6 +501,9 @@ class VisionGuidedSidePickFSM:
         ]
 
     def _build_place_to_washer_segments(self, tray: SimTray) -> list[TrajectorySegment]:
+        # FIXME/TODO: 当前 ikpy 未解出目标欧拉姿态，强制用归零种子打破每次扭曲姿势不同的累计误差。
+        if self._ik_solver is not None and hasattr(self._ik_solver, "reset_seed"):
+            self._ik_solver.reset_seed()
         q = self._side_pick_quat
         infeed = self.layout.washer_infeed
         target_tray_center = Vec3(infeed.x, infeed.y, infeed.z)
@@ -507,7 +513,7 @@ class VisionGuidedSidePickFSM:
             target_tray_center.y,
             target_tray_center.z,
         )
-        pre = Vec3(contact.x + approach_sign * 0.20, contact.y, contact.z + 0.06)
+        pre = Vec3(contact.x + approach_sign * 0.20, contact.y, contact.z)
         retreat = Vec3(contact.x + approach_sign * 0.20, contact.y, contact.z + 0.03)
         home = self.layout.safe_home
 
@@ -544,6 +550,9 @@ class VisionGuidedSidePickFSM:
         ]
 
     def _build_place_clean_segments(self, tray: SimTray) -> list[TrajectorySegment]:
+        # FIXME/TODO: 当前 ikpy 未解出目标欧拉姿态，强制用归零种子打破每次扭曲姿势不同的累计误差。
+        if self._ik_solver is not None and hasattr(self._ik_solver, "reset_seed"):
+            self._ik_solver.reset_seed()
         q = self._side_pick_quat
         base = self.layout.clean_rack_place_base
         place_z = base.z + self.clean_stack_count * self.cfg.tray_thickness_m
@@ -554,7 +563,7 @@ class VisionGuidedSidePickFSM:
             target_tray_center.y,
             target_tray_center.z,
         )
-        pre = Vec3(place.x + approach_sign * 0.15, place.y, place.z + 0.02)
+        pre = Vec3(place.x + approach_sign * 0.15, place.y, place.z)
         retreat = Vec3(place.x + approach_sign * 0.20, place.y, place.z + 0.03)
         home = self.layout.safe_home
 
