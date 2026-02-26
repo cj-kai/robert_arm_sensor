@@ -253,6 +253,7 @@ class SidePickConfig:
     retreat_push_speed_scale: float = 0.90
     tray_thickness_m: float = 0.05
     washer_cycle_s: float = 8.0
+    post_place_clean_hold_s: float = 3.0
     # Vision mock noise (simulates USB camera + tag solve error)
     vision_noise_xy_m: float = 0.015
     vision_confidence_threshold: float = 0.90
@@ -295,6 +296,8 @@ class VisionGuidedSidePickFSM:
         self._active_tray: Optional[SimTray] = None
         self._washer_tray: Optional[SimTray] = None
         self._washer_elapsed_s = 0.0
+        self._last_placed_clean_tray: Optional[SimTray] = None
+        self._post_place_clean_hold_until_s = 0.0
         self._dirty_trays = self._make_initial_dirty_trays()
         self._init_ik_solver()
         self._update_joint_solution_from_ee_pose()
@@ -442,6 +445,10 @@ class VisionGuidedSidePickFSM:
     def _handle_place_clean(self) -> None:
         if self._active_tray is None:
             if self._traj is None:
+                if self._post_place_clean_hold_until_s > self.sim_time_s:
+                    return
+                self._last_placed_clean_tray = None
+                self._post_place_clean_hold_until_s = 0.0
                 self.total_cycles += 1
                 self._transition(SidePickState.DETECT_DIRTY)
             return
@@ -513,8 +520,10 @@ class VisionGuidedSidePickFSM:
         def on_release() -> None:
             self.vacuum.turn_off()
             tray.is_clean = False
-            tray.sync_with_tool(self._ee_pose)
-            tray.release_from_tool(tray.pose.copy())  # release at conveyor contact truth
+            # Release at the exact infeed center so washer path takeover starts from
+            # the same coordinate (prevents visible handoff "teleport").
+            exact_infeed_pose = self._make_pose(target_tray_center, self._side_pick_quat)
+            tray.release_from_tool(exact_infeed_pose)
             self._washer_tray = tray
             self._active_tray = None
             self._washer_elapsed_s = 0.0
@@ -558,9 +567,11 @@ class VisionGuidedSidePickFSM:
         def on_release() -> None:
             self.vacuum.turn_off()
             tray.is_clean = True
-            tray.sync_with_tool(self._ee_pose)
-            tray.release_from_tool(tray.pose.copy())
+            exact_place_pose = self._make_pose(target_tray_center, self._side_pick_quat)
+            tray.release_from_tool(exact_place_pose)
             self.clean_stack_count += 1
+            self._last_placed_clean_tray = tray
+            self._post_place_clean_hold_until_s = self.sim_time_s + max(0.0, self.cfg.post_place_clean_hold_s)
             self._active_tray = None
 
         return [
@@ -640,8 +651,11 @@ class VisionGuidedSidePickFSM:
         tray = self._washer_tray
         if tray is None:
             return
-        self._washer_elapsed_s += max(0.0, dt)
-        progress = clamp01(self._washer_elapsed_s / max(0.001, self.cfg.washer_cycle_s))
+        # Sample at current elapsed time first, then advance elapsed.
+        # This keeps the first takeover frame exactly at washer_infeed and avoids
+        # a visible jump when vacuum is released.
+        cycle_s = max(0.001, self.cfg.washer_cycle_s)
+        progress = clamp01(self._washer_elapsed_s / cycle_s)
 
         # Simulated U-shaped conveyor path: infeed -> right arc -> return_pick.
         arc_center_x = 2.30
@@ -668,7 +682,8 @@ class VisionGuidedSidePickFSM:
             pos = Vec3(arc_exit.x + (e.x - arc_exit.x) * t, arc_exit.y + (e.y - arc_exit.y) * t, z)
 
         tray.pose = Pose(pos=pos, quat=self._side_pick_quat)
-        if progress >= 1.0:
+        self._washer_elapsed_s = min(cycle_s, self._washer_elapsed_s + max(0.0, dt))
+        if self._washer_elapsed_s >= cycle_s:
             tray.is_clean = True
 
     # ----- helpers -----

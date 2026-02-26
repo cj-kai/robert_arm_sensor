@@ -579,6 +579,9 @@ async function buildThreeApp(THREE, OrbitControls, URDFLoaderClass = null) {
     let trayLastFlowStage = 'DIRTY_TO_WASHER';
     const trayWorldTmp = new THREE.Vector3();
     const trayColorTarget = new THREE.Color(0xf59e0b);
+    const trayDimsCurrent = { x: TRAY_BASE_DIMS.x_m, y: TRAY_BASE_DIMS.y_m, z: TRAY_BASE_DIMS.z_m };
+    const VISUAL_SUCTION_CONTACT_X = 0.045; // align to TCP sphere marker on the side-suction head
+    const VISUAL_SUCTION_GAP = 0.002; // tiny visual clearance to avoid z-fighting/flicker
 
     const setTrayWorldPosition = (worldPos) => {
         if (!tray.parent || tray.parent === scene) {
@@ -595,6 +598,15 @@ async function buildThreeApp(THREE, OrbitControls, URDFLoaderClass = null) {
         ee.updateMatrixWorld(true);
         if (shouldAttach) {
             ee.attach(tray); // preserve world transform while parenting to end-effector
+            // Force a clean local snap to the suction face so we do not keep the
+            // pre-attach world-space error (which looks like "remote suction").
+            const localSign = tray.position.x >= 0 ? 1 : -1;
+            tray.position.set(
+                VISUAL_SUCTION_CONTACT_X + localSign * (trayDimsCurrent.x / 2 + VISUAL_SUCTION_GAP),
+                0,
+                0
+            );
+            tray.rotation.set(0, 0, 0);
         } else {
             scene.attach(tray); // preserve world transform while returning to scene root
         }
@@ -956,6 +968,9 @@ async function buildThreeApp(THREE, OrbitControls, URDFLoaderClass = null) {
                 const dx = Math.max(0.12, asNumber(dims.x_m, TRAY_BASE_DIMS.x_m));
                 const dy = Math.max(0.08, asNumber(dims.y_m, TRAY_BASE_DIMS.y_m));
                 const dz = Math.max(0.012, asNumber(dims.z_m, TRAY_BASE_DIMS.z_m));
+                trayDimsCurrent.x = dx;
+                trayDimsCurrent.y = dy;
+                trayDimsCurrent.z = dz;
                 tray.scale.set(dx / TRAY_BASE_DIMS.x_m, dz / TRAY_BASE_DIMS.z_m, dy / TRAY_BASE_DIMS.y_m);
                 const trayGoal = new THREE.Vector3();
                 const stateCode = String(data.state || '');

@@ -345,6 +345,8 @@ class SidePickExecutionFSM:
             return self.core._active_tray
         if self.core._washer_tray is not None:
             return self.core._washer_tray
+        if getattr(self.core, "_last_placed_clean_tray", None) is not None:
+            return self.core._last_placed_clean_tray
         return self.core._peek_dirty_tray()
 
     def _payload_dict(self, tray) -> dict:
