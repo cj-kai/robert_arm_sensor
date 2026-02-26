@@ -950,6 +950,7 @@ async function buildThreeApp(THREE, OrbitControls, URDFLoaderClass = null) {
 
                 const backendTrayBody = data.tray_body || {};
                 const backendTrayPose = backendTrayBody.pose || null;
+                const backendBoundToTool = !!backendTrayBody.bound_to_tool;
                 const hasBackendTrayPose = !!backendTrayBody.visible && !!backendTrayPose;
                 const dims = (backendTrayBody.dims_m || data.payload?.dims_m || {});
                 const dx = Math.max(0.12, asNumber(dims.x_m, TRAY_BASE_DIMS.x_m));
@@ -991,11 +992,20 @@ async function buildThreeApp(THREE, OrbitControls, URDFLoaderClass = null) {
                 );
                 const pickupCloseEnough = sideContactTruth.distanceTo(targetGoal) < Math.max(0.14, Math.min(0.28, dx * 0.6));
                 const carryEligible = !!data.grip?.sealed && carryingStates.has(stateCode);
-                if (hasBackendTrayPose) {
+                // Strict rule: once the tray is (or is about to be) attached as a child of the
+                // end-effector, ignore backend absolute tray pose updates to avoid pose conflicts.
+                // The tray should move only via parent-child transform inheritance until detached.
+                const ignoreBackendTrayPose = trayAttachedVisual || backendBoundToTool;
+                if (hasBackendTrayPose && !ignoreBackendTrayPose) {
                     const trayMapped = mapPose(backendTrayPose);
                     trayGoal.set(trayMapped.x, Math.max(dz / 2, trayMapped.y), trayMapped.z);
-                    trayAttached = !!backendTrayBody.bound_to_tool;
+                    trayAttached = backendBoundToTool;
                     trayAttachBlend = trayAttached ? 1 : 0;
+                } else if (hasBackendTrayPose) {
+                    trayAttached = backendBoundToTool;
+                    trayAttachBlend = trayAttached ? 1 : 0;
+                    // Keep trayGoal stable while attached; world pose is controlled by ee.attach().
+                    trayGoal.copy(trayVisualPos);
                 } else {
                     if (!trayAttached && carryEligible && pickupCloseEnough) {
                         trayAttached = true;
