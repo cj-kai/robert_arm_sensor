@@ -459,7 +459,7 @@ class VisionGuidedSidePickFSM:
     # ----- trajectory builders -----
 
     def _build_side_pick_segments(self, target: Vec3, tray: SimTray) -> list[TrajectorySegment]:
-        # FIXME/TODO: 当前 ikpy 未解出目标欧拉姿态，强制用归零种子打破每次扭曲姿势不同的累计误差。
+        # Reset IK seed per planned sequence to reduce branch drift across cycles.
         if self._ik_solver is not None and hasattr(self._ik_solver, "reset_seed"):
             self._ik_solver.reset_seed()
         # `target` is the detected tray side-center (not tray center) in world coordinates.
@@ -501,7 +501,7 @@ class VisionGuidedSidePickFSM:
         ]
 
     def _build_place_to_washer_segments(self, tray: SimTray) -> list[TrajectorySegment]:
-        # FIXME/TODO: 当前 ikpy 未解出目标欧拉姿态，强制用归零种子打破每次扭曲姿势不同的累计误差。
+        # Reset IK seed per planned sequence to reduce branch drift across cycles.
         if self._ik_solver is not None and hasattr(self._ik_solver, "reset_seed"):
             self._ik_solver.reset_seed()
         q = self._side_pick_quat
@@ -550,7 +550,7 @@ class VisionGuidedSidePickFSM:
         ]
 
     def _build_place_clean_segments(self, tray: SimTray) -> list[TrajectorySegment]:
-        # FIXME/TODO: 当前 ikpy 未解出目标欧拉姿态，强制用归零种子打破每次扭曲姿势不同的累计误差。
+        # Reset IK seed per planned sequence to reduce branch drift across cycles.
         if self._ik_solver is not None and hasattr(self._ik_solver, "reset_seed"):
             self._ik_solver.reset_seed()
         q = self._side_pick_quat

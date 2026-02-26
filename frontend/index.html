@@ -6,7 +6,7 @@
     <title>Vacuum Grasp Dashboard</title>
     <!-- Tailwind CSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- Chart.js CDN (保留用于真空曲线) -->
+    <!-- Chart.js CDN (kept for vacuum trend chart) -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         body { background-color: #0f172a; }
@@ -597,7 +597,7 @@ async function buildThreeApp(THREE, OrbitControls, URDFLoaderClass = null) {
         scene.updateMatrixWorld(true);
         ee.updateMatrixWorld(true);
         if (shouldAttach) {
-            // 先在世界坐标系下获取实际的 X 符号
+            // Compute attach direction from world-space X before parenting.
             const trayWorldPos = new THREE.Vector3();
             tray.getWorldPosition(trayWorldPos);
             const localSign = trayWorldPos.x >= 0 ? 1 : -1;
@@ -609,7 +609,7 @@ async function buildThreeApp(THREE, OrbitControls, URDFLoaderClass = null) {
                 0,
                 0
             );
-            tray.rotation.set(0, 0, 0); // 强行回正局部姿态
+            tray.rotation.set(0, 0, 0); // keep tray local orientation stable while attached
         } else {
             scene.attach(tray); // preserve world transform while returning to scene root
         }
@@ -957,8 +957,7 @@ async function buildThreeApp(THREE, OrbitControls, URDFLoaderClass = null) {
 
                 const tp = data.target_pose || {};
                 const pp = data.place_pose || {};
-
-                // 动态判断当前是在处理净盘还是脏盘
+                // Dynamically choose destination fallback by current tray cleanliness.
                 const isCleanNow = data.payload?.is_clean || false;
                 const fallbackLayout = isCleanNow ? WORKCELL_LAYOUT.cleanRack : WORKCELL_LAYOUT.washerLoad;
 
@@ -1055,7 +1054,7 @@ async function buildThreeApp(THREE, OrbitControls, URDFLoaderClass = null) {
                     } else if (data.payload?.is_clean && stateCode === 'IDLE') {
                         trayGoal.copy(placeGoal);
                     } else if (stateCode === 'MOVING_TO_PLACE' || stateCode === 'RELEASING_LOAD') {
-                        trayGoal.copy(placeGoal); // 放置阶段留在目标地，防止闪现回起点
+                        trayGoal.copy(placeGoal); // keep tray at destination during place/release
                     } else {
                         trayGoal.copy(targetGoal);
                     }
