@@ -242,7 +242,7 @@ class WorkcellLayout:
 @dataclass
 class SidePickConfig:
     # Side-pick approach geometry
-    tcp_offset_m: float = 0.06  # flange/tool origin to suction contact point
+    tcp_offset_m: float = 0.045  # flange/tool origin to suction contact point (align with frontend TCP marker)
     pregrasp_offset_x_m: float = 0.15
     approach_standoff_m: float = 0.15  # preferred replacement for pregrasp_offset_x_m
     retreat_lift_m: float = 0.02
