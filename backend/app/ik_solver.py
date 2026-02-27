@@ -105,6 +105,21 @@ class CRX20IkPySolver:
             full = np.asarray(solution, dtype=float)
             if full.shape[0] != len(self._chain.links):
                 return IKResult(False, [0.0] * 6, "Unexpected ikpy solution length")
+
+            # Protect runtime against branch jumps (elbow flip / wrist flip).
+            # We allow the first solve to settle, then reject single-step jumps > ~68 deg.
+            is_initial_solve = float(np.sum(np.abs(self._last_solution))) < 1e-6
+            if not is_initial_solve:
+                delta = full - self._last_solution
+                # Wrap to [-pi, pi] before measuring jump magnitude.
+                delta_wrapped = (delta + np.pi) % (2.0 * np.pi) - np.pi
+                jump_magnitude = float(np.max(np.abs(delta_wrapped)))
+                if jump_magnitude > 1.2:
+                    return IKResult(
+                        True,
+                        [float(self._last_solution[idx]) for idx in self._joint_indices],
+                    )
+
             self._last_solution = full
             joints = [float(full[idx]) for idx in self._joint_indices]
             return IKResult(True, joints)

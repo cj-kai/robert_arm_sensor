@@ -292,6 +292,7 @@ const WORKCELL_LAYOUT = {
     returnChute: { center_x_m: 1.65, center_y_m: -1.0, size_x_m: 1.00, size_y_m: 0.16, size_h_m: 0.05 }
 };
 const TRAY_BASE_DIMS = { x_m: 0.40, y_m: 0.40, z_m: 0.05 }; // x/y: tray footprint, z: thickness (meters)
+const worldZFromPlantY = (yLike, fallback = 0) => -asNumber(yLike, fallback);
 const URDF_JOINT_NAME_CANDIDATES = [
     ['J1', 'shoulder_pan_joint'],
     ['J2', 'shoulder_lift_joint'],
@@ -529,14 +530,14 @@ async function buildThreeApp(THREE, OrbitControls, URDFLoaderClass = null) {
         new THREE.BoxGeometry(TRAY_BASE_DIMS.x_m, Math.max(0.01, TRAY_BASE_DIMS.z_m), TRAY_BASE_DIMS.y_m),
         trayMat
     );
-    tray.position.set(WORKCELL_LAYOUT.dirtyRack.x_m, TRAY_BASE_DIMS.z_m / 2, WORKCELL_LAYOUT.dirtyRack.y_m);
+    tray.position.set(WORKCELL_LAYOUT.dirtyRack.x_m, TRAY_BASE_DIMS.z_m / 2, worldZFromPlantY(WORKCELL_LAYOUT.dirtyRack.y_m));
     scene.add(tray);
 
     const placeZone = new THREE.Mesh(
         new THREE.BoxGeometry(0.18, 0.02, 0.12),
         new THREE.MeshStandardMaterial({ color: 0xa7f3d0, transparent: true, opacity: 0.25 })
     );
-    placeZone.position.set(WORKCELL_LAYOUT.washerLoad.x_m, 0.01, WORKCELL_LAYOUT.washerLoad.y_m);
+    placeZone.position.set(WORKCELL_LAYOUT.washerLoad.x_m, 0.01, worldZFromPlantY(WORKCELL_LAYOUT.washerLoad.y_m));
     scene.add(placeZone);
 
     const marker = new THREE.Mesh(
@@ -619,10 +620,18 @@ async function buildThreeApp(THREE, OrbitControls, URDFLoaderClass = null) {
     const sampleWasherReturnPath = (progress01, trayHeight) => {
         const p = Math.max(0, Math.min(1, asNumber(progress01, 0)));
         const centerY = Math.max(trayHeight / 2 + 0.01, WORKCELL_LAYOUT.washerLoad.z_m + trayHeight / 2);
-        const p0 = new THREE.Vector3(WORKCELL_LAYOUT.washerLoad.x_m, centerY, WORKCELL_LAYOUT.washerLoad.y_m);
-        const p1 = new THREE.Vector3(WORKCELL_LAYOUT.returnLoop.center_x_m, centerY, WORKCELL_LAYOUT.returnLoop.center_y_m + WORKCELL_LAYOUT.returnLoop.radius_m);
-        const p2 = new THREE.Vector3(WORKCELL_LAYOUT.returnLoop.center_x_m, centerY, WORKCELL_LAYOUT.returnLoop.center_y_m - WORKCELL_LAYOUT.returnLoop.radius_m);
-        const p3 = new THREE.Vector3(WORKCELL_LAYOUT.washerReturn.x_m, centerY, WORKCELL_LAYOUT.washerReturn.y_m);
+        const p0 = new THREE.Vector3(WORKCELL_LAYOUT.washerLoad.x_m, centerY, worldZFromPlantY(WORKCELL_LAYOUT.washerLoad.y_m));
+        const p1 = new THREE.Vector3(
+            WORKCELL_LAYOUT.returnLoop.center_x_m,
+            centerY,
+            worldZFromPlantY(WORKCELL_LAYOUT.returnLoop.center_y_m + WORKCELL_LAYOUT.returnLoop.radius_m)
+        );
+        const p2 = new THREE.Vector3(
+            WORKCELL_LAYOUT.returnLoop.center_x_m,
+            centerY,
+            worldZFromPlantY(WORKCELL_LAYOUT.returnLoop.center_y_m - WORKCELL_LAYOUT.returnLoop.radius_m)
+        );
+        const p3 = new THREE.Vector3(WORKCELL_LAYOUT.washerReturn.x_m, centerY, worldZFromPlantY(WORKCELL_LAYOUT.washerReturn.y_m));
         if (p < 0.25) {
             return p0.lerp(p1, p / 0.25);
         }
@@ -632,7 +641,7 @@ async function buildThreeApp(THREE, OrbitControls, URDFLoaderClass = null) {
             return new THREE.Vector3(
                 WORKCELL_LAYOUT.returnLoop.center_x_m + WORKCELL_LAYOUT.returnLoop.radius_m * Math.cos(theta),
                 centerY,
-                WORKCELL_LAYOUT.returnLoop.center_y_m + WORKCELL_LAYOUT.returnLoop.radius_m * Math.sin(theta)
+                worldZFromPlantY(WORKCELL_LAYOUT.returnLoop.center_y_m + WORKCELL_LAYOUT.returnLoop.radius_m * Math.sin(theta))
             );
         }
         return p2.lerp(p3, (p - 0.75) / 0.25);
@@ -821,7 +830,7 @@ async function buildThreeApp(THREE, OrbitControls, URDFLoaderClass = null) {
     );
 
     const placeAtPose = (mesh, pose, yOffset = 0) => {
-        mesh.position.set(asNumber(pose.x_m, 0), asNumber(pose.z_m, 0) + yOffset, asNumber(pose.y_m, 0));
+        mesh.position.set(asNumber(pose.x_m, 0), asNumber(pose.z_m, 0) + yOffset, worldZFromPlantY(pose.y_m, 0));
     };
     placeAtPose(dirtyRack, WORKCELL_LAYOUT.dirtyRack, 0.01);
     placeAtPose(cleanRack, WORKCELL_LAYOUT.cleanRack, 0.01);
@@ -830,41 +839,45 @@ async function buildThreeApp(THREE, OrbitControls, URDFLoaderClass = null) {
     conveyorUpper.position.set(
         WORKCELL_LAYOUT.conveyorUpper.center_x_m,
         WORKCELL_LAYOUT.washerLoad.z_m + WORKCELL_LAYOUT.conveyorUpper.size_h_m / 2,
-        WORKCELL_LAYOUT.conveyorUpper.center_y_m
+        worldZFromPlantY(WORKCELL_LAYOUT.conveyorUpper.center_y_m)
     );
     conveyorLower.position.set(
         WORKCELL_LAYOUT.conveyorLower.center_x_m,
         WORKCELL_LAYOUT.washerReturn.z_m + WORKCELL_LAYOUT.conveyorLower.size_h_m / 2,
-        WORKCELL_LAYOUT.conveyorLower.center_y_m
+        worldZFromPlantY(WORKCELL_LAYOUT.conveyorLower.center_y_m)
     );
     conveyorUpperEdge.position.set(
         WORKCELL_LAYOUT.conveyorUpper.center_x_m,
         WORKCELL_LAYOUT.washerLoad.z_m + WORKCELL_LAYOUT.conveyorUpper.size_h_m + 0.01,
-        WORKCELL_LAYOUT.conveyorUpper.center_y_m
+        worldZFromPlantY(WORKCELL_LAYOUT.conveyorUpper.center_y_m)
     );
     conveyorLowerEdge.position.set(
         WORKCELL_LAYOUT.conveyorLower.center_x_m,
         WORKCELL_LAYOUT.washerReturn.z_m + WORKCELL_LAYOUT.conveyorLower.size_h_m + 0.01,
-        WORKCELL_LAYOUT.conveyorLower.center_y_m
+        worldZFromPlantY(WORKCELL_LAYOUT.conveyorLower.center_y_m)
     );
     washerBody.position.set(
         WORKCELL_LAYOUT.washerBody.center_x_m,
         WORKCELL_LAYOUT.washerBody.size_h_m / 2,
-        WORKCELL_LAYOUT.washerBody.center_y_m
+        worldZFromPlantY(WORKCELL_LAYOUT.washerBody.center_y_m)
     );
     returnChute.position.set(
         WORKCELL_LAYOUT.returnChute.center_x_m,
         WORKCELL_LAYOUT.washerReturn.z_m + WORKCELL_LAYOUT.returnChute.size_h_m / 2,
-        WORKCELL_LAYOUT.returnChute.center_y_m
+        worldZFromPlantY(WORKCELL_LAYOUT.returnChute.center_y_m)
     );
     placeAtPose(washerLoadMarker, WORKCELL_LAYOUT.washerLoad, 0.006);
     placeAtPose(washerReturnMarker, WORKCELL_LAYOUT.washerReturn, 0.006);
-    returnLoop.position.set(WORKCELL_LAYOUT.returnLoop.center_x_m, WORKCELL_LAYOUT.washerReturn.z_m, WORKCELL_LAYOUT.returnLoop.center_y_m);
+    returnLoop.position.set(
+        WORKCELL_LAYOUT.returnLoop.center_x_m,
+        WORKCELL_LAYOUT.washerReturn.z_m,
+        worldZFromPlantY(WORKCELL_LAYOUT.returnLoop.center_y_m)
+    );
 
     const mapPose = (pose) => ({
         x: asNumber(pose.x_m, 0),
         y: asNumber(pose.z_m, 0.3),
-        z: asNumber(pose.y_m, 0)
+        z: worldZFromPlantY(pose.y_m, 0)
     });
     const deg2rad = (d) => asNumber(d, 0) * Math.PI / 180;
 
@@ -964,7 +977,7 @@ async function buildThreeApp(THREE, OrbitControls, URDFLoaderClass = null) {
                 placeZone.position.set(
                     asNumber(pp.x_m, fallbackLayout.x_m),
                     Math.max(0.01, asNumber(pp.z_m, fallbackLayout.z_m) - 0.03),
-                    asNumber(pp.y_m, fallbackLayout.y_m)
+                    worldZFromPlantY(pp.y_m, fallbackLayout.y_m)
                 );
 
                 const backendTrayBody = data.tray_body || {};
@@ -997,12 +1010,12 @@ async function buildThreeApp(THREE, OrbitControls, URDFLoaderClass = null) {
                 const targetGoal = new THREE.Vector3(
                     asNumber(tp.x_m, WORKCELL_LAYOUT.dirtyRack.x_m),
                     dz / 2 + Math.max(0.0, asNumber(tp.z_m, WORKCELL_LAYOUT.dirtyRack.z_m)),
-                    asNumber(tp.y_m, WORKCELL_LAYOUT.dirtyRack.y_m)
+                    worldZFromPlantY(tp.y_m, WORKCELL_LAYOUT.dirtyRack.y_m)
                 );
                 const placeGoal = new THREE.Vector3(
                     asNumber(pp.x_m, fallbackLayout.x_m),
                     dz / 2 + Math.max(0.0, asNumber(pp.z_m, fallbackLayout.z_m)),
-                    asNumber(pp.y_m, fallbackLayout.y_m)
+                    worldZFromPlantY(pp.y_m, fallbackLayout.y_m)
                 );
                 const tcpTruth = new THREE.Vector3(mapped.x, mapped.y, mapped.z);
                 const eeForCarry = eeWorld.distanceTo(tcpTruth) < 0.45 ? eeWorld : tcpTruth;
