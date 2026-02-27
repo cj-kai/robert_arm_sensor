@@ -236,7 +236,7 @@ class WorkcellLayout:
     return_pick: Vec3 = field(default_factory=lambda: Vec3(1.20, -1.00, 0.50))
     dirty_observe: Vec3 = field(default_factory=lambda: Vec3(-1.80, 0.95, 0.95))
     return_observe: Vec3 = field(default_factory=lambda: Vec3(0.95, -1.30, 0.95))
-    safe_home: Vec3 = field(default_factory=lambda: Vec3(0.0, 0.0, 1.0))
+    safe_home: Vec3 = field(default_factory=lambda: Vec3(0.60, 0.0, 0.90))
 
 
 @dataclass

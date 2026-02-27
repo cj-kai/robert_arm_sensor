@@ -598,19 +598,8 @@ async function buildThreeApp(THREE, OrbitControls, URDFLoaderClass = null) {
         scene.updateMatrixWorld(true);
         ee.updateMatrixWorld(true);
         if (shouldAttach) {
-            // Compute attach direction from world-space X before parenting.
-            const trayWorldPos = new THREE.Vector3();
-            tray.getWorldPosition(trayWorldPos);
-            const localSign = trayWorldPos.x >= 0 ? 1 : -1;
-
+            // Keep world transform continuity via parent switch only.
             ee.attach(tray);
-
-            tray.position.set(
-                VISUAL_SUCTION_CONTACT_X + localSign * (trayDimsCurrent.x / 2 + VISUAL_SUCTION_GAP),
-                0,
-                0
-            );
-            tray.rotation.set(0, 0, 0); // keep tray local orientation stable while attached
         } else {
             scene.attach(tray); // preserve world transform while returning to scene root
         }
