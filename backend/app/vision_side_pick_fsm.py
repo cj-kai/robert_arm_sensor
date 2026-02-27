@@ -461,7 +461,7 @@ class VisionGuidedSidePickFSM:
     def _build_side_pick_segments(self, target: Vec3, tray: SimTray) -> list[TrajectorySegment]:
         # Reset IK seed per planned sequence to reduce branch drift across cycles.
         if self._ik_solver is not None and hasattr(self._ik_solver, "reset_seed"):
-            self._ik_solver.reset_seed()
+            self._ik_solver.reset_seed(self._joint_angles_rad)
         # `target` is the detected tray side-center (not tray center) in world coordinates.
         q = self._side_pick_quat
         approach_sign = self._approach_sign_for_target(target)
@@ -503,10 +503,11 @@ class VisionGuidedSidePickFSM:
     def _build_place_to_washer_segments(self, tray: SimTray) -> list[TrajectorySegment]:
         # Reset IK seed per planned sequence to reduce branch drift across cycles.
         if self._ik_solver is not None and hasattr(self._ik_solver, "reset_seed"):
-            self._ik_solver.reset_seed()
+            self._ik_solver.reset_seed(self._joint_angles_rad)
         q = self._side_pick_quat
         infeed = self.layout.washer_infeed
-        target_tray_center = Vec3(infeed.x, infeed.y, infeed.z)
+        # infeed.z is conveyor plane height; tray center must include half thickness.
+        target_tray_center = Vec3(infeed.x, infeed.y, infeed.z + tray.dims_m.z / 2.0)
         approach_sign = self._approach_sign_for_target(target_tray_center)
         contact = Vec3(
             target_tray_center.x + approach_sign * (tray.dims_m.x / 2.0 + self.cfg.tcp_offset_m),
@@ -552,10 +553,11 @@ class VisionGuidedSidePickFSM:
     def _build_place_clean_segments(self, tray: SimTray) -> list[TrajectorySegment]:
         # Reset IK seed per planned sequence to reduce branch drift across cycles.
         if self._ik_solver is not None and hasattr(self._ik_solver, "reset_seed"):
-            self._ik_solver.reset_seed()
+            self._ik_solver.reset_seed(self._joint_angles_rad)
         q = self._side_pick_quat
         base = self.layout.clean_rack_place_base
-        place_z = base.z + self.clean_stack_count * self.cfg.tray_thickness_m
+        # base.z is rack plane height; tray center must include half thickness.
+        place_z = base.z + self.clean_stack_count * self.cfg.tray_thickness_m + tray.dims_m.z / 2.0
         target_tray_center = Vec3(base.x, base.y, place_z)
         approach_sign = self._approach_sign_for_target(target_tray_center)
         place = Vec3(
@@ -670,7 +672,7 @@ class VisionGuidedSidePickFSM:
         arc_center_x = 2.30
         arc_center_y = 0.0
         arc_radius = 1.10
-        z = self.layout.washer_infeed.z
+        z = self.layout.washer_infeed.z + tray.dims_m.z / 2.0
         s = self.layout.washer_infeed
         e = self.layout.return_pick
 

@@ -1018,15 +1018,15 @@ async function buildThreeApp(THREE, OrbitControls, URDFLoaderClass = null) {
                     worldZFromPlantY(pp.y_m, fallbackLayout.y_m)
                 );
                 const tcpTruth = new THREE.Vector3(mapped.x, mapped.y, mapped.z);
-                const eeForCarry = eeWorld.distanceTo(tcpTruth) < 0.45 ? eeWorld : tcpTruth;
                 const carrySideHint = targetGoal.x <= 0 ? 1 : -1;
                 const sideContactTruth = new THREE.Vector3(
                     tcpTruth.x + carrySideHint * (dx / 2 + 0.06),
                     Math.max(dz / 2 + 0.01, tcpTruth.y),
                     tcpTruth.z
                 );
-                const pickupCloseEnough = sideContactTruth.distanceTo(targetGoal) < Math.max(0.14, Math.min(0.28, dx * 0.6));
-                const carryEligible = !!data.grip?.sealed && carryingStates.has(stateCode);
+                const pickupCloseEnough = sideContactTruth.distanceTo(targetGoal) < 0.035;
+                const isCarryingState = carryingStates.has(stateCode) || stateCode === 'MOVING_TO_PLACE' || stateCode === 'RELEASING_LOAD';
+                const carryEligible = !!data.grip?.sealed && isCarryingState;
                 // Strict rule: once the tray is (or is about to be) attached as a child of the
                 // end-effector, ignore backend absolute tray pose updates to avoid pose conflicts.
                 // The tray should move only via parent-child transform inheritance until detached.
@@ -1052,14 +1052,8 @@ async function buildThreeApp(THREE, OrbitControls, URDFLoaderClass = null) {
                     }
 
                     if (trayAttached) {
-                        trayAttachBlend = Math.min(1, trayAttachBlend + 0.10);
-                        const carrySide = eeForCarry.x <= 0 ? 1 : -1;
-                        const carryGoal = new THREE.Vector3(
-                            eeForCarry.x + carrySide * (dx / 2 + 0.06),
-                            Math.max(dz / 2 + 0.01, eeForCarry.y),
-                            eeForCarry.z
-                        );
-                        trayGoal.copy(targetGoal).lerp(carryGoal, trayAttachBlend);
+                        // While attached, let parent-child transform control tray motion.
+                        trayGoal.copy(trayVisualPos);
                     } else if (washerBusy || (flowStage === 'WASHER_PROCESS' && !washerDone)) {
                         trayGoal.copy(sampleWasherReturnPath(washerProgress, dz));
                     } else if (washerDone && flowStage === 'WASHER_TO_CLEAN') {

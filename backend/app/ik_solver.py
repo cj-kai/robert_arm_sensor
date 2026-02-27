@@ -85,40 +85,62 @@ class CRX20IkPySolver:
             index_map.append(found)
         return index_map
 
-    def reset_seed(self) -> None:
-        """Reset initial position to zero, preventing cumulative twist between FSM cycles."""
-        self._last_solution = np.zeros(len(self._chain.links), dtype=float)
+    def reset_seed(self, current_joints: Sequence[float] | None = None) -> None:
+        """Reset IK seed from current posture to preserve continuity across FSM transitions."""
+        if current_joints is None:
+            self._last_solution = np.zeros(len(self._chain.links), dtype=float)
+            return
+
+        full = np.array(self._last_solution, dtype=float, copy=True)
+        if full.shape[0] != len(self._chain.links):
+            full = np.zeros(len(self._chain.links), dtype=float)
+
+        joints = [float(v) for v in current_joints]
+        for j_idx, chain_idx in enumerate(self._joint_indices):
+            if j_idx < len(joints):
+                full[chain_idx] = joints[j_idx]
+        self._last_solution = full
 
     def solve_tcp_pose(
         self,
         xyz_m: Sequence[float],
         side_pick_quat_xyzw: Sequence[float] | None = None,  # reserved for orientation-constrained solve
     ) -> IKResult:
-        del side_pick_quat_xyzw  # orientation constraint can be added in a later refinement
-
         try:
             target_position = np.array([float(xyz_m[0]), float(xyz_m[1]), float(xyz_m[2])], dtype=float)
-            solution = self._chain.inverse_kinematics(
-                target_position=target_position,
-                initial_position=self._last_solution,
-            )
+            kwargs: dict[str, object] = {
+                "target_position": target_position,
+                "initial_position": self._last_solution,
+            }
+
+            solution = None
+            if side_pick_quat_xyzw is not None and len(side_pick_quat_xyzw) == 4:
+                x, y, z, w = [float(v) for v in side_pick_quat_xyzw]
+                norm = float(np.sqrt(x * x + y * y + z * z + w * w))
+                if norm > 1e-9:
+                    x, y, z, w = x / norm, y / norm, z / norm, w / norm
+                    rot = np.array(
+                        [
+                            [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+                            [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+                            [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)],
+                        ],
+                        dtype=float,
+                    )
+                    orient_kwargs = dict(kwargs)
+                    orient_kwargs["target_orientation"] = rot
+                    orient_kwargs["orientation_mode"] = "all"
+                    try:
+                        solution = self._chain.inverse_kinematics(**orient_kwargs)
+                    except Exception:
+                        solution = None
+
+            if solution is None:
+                solution = self._chain.inverse_kinematics(**kwargs)
+
             full = np.asarray(solution, dtype=float)
             if full.shape[0] != len(self._chain.links):
                 return IKResult(False, [0.0] * 6, "Unexpected ikpy solution length")
-
-            # Protect runtime against branch jumps (elbow flip / wrist flip).
-            # We allow the first solve to settle, then reject single-step jumps > ~68 deg.
-            is_initial_solve = float(np.sum(np.abs(self._last_solution))) < 1e-6
-            if not is_initial_solve:
-                delta = full - self._last_solution
-                # Wrap to [-pi, pi] before measuring jump magnitude.
-                delta_wrapped = (delta + np.pi) % (2.0 * np.pi) - np.pi
-                jump_magnitude = float(np.max(np.abs(delta_wrapped)))
-                if jump_magnitude > 1.2:
-                    return IKResult(
-                        True,
-                        [float(self._last_solution[idx]) for idx in self._joint_indices],
-                    )
 
             self._last_solution = full
             joints = [float(full[idx]) for idx in self._joint_indices]
