@@ -281,15 +281,15 @@ const btnStop = document.getElementById('btn-stop');
 const btnReset = document.getElementById('btn-reset');
 
 const WORKCELL_LAYOUT = {
-    dirtyRack: { x_m: -1.5, y_m: 1.2, z_m: 0.0 },
-    cleanRack: { x_m: -1.5, y_m: -1.2, z_m: 0.0 },
-    washerLoad: { x_m: 1.2, y_m: 1.0, z_m: 0.5 },
-    washerReturn: { x_m: 1.2, y_m: -1.0, z_m: 0.5 },
-    washerBody: { center_x_m: 2.65, center_y_m: 0.0, size_x_m: 1.35, size_y_m: 0.72, size_h_m: 0.60 },
-    conveyorUpper: { center_x_m: 1.75, center_y_m: 1.0, size_x_m: 1.55, size_y_m: 0.18, size_h_m: 0.06 },
-    conveyorLower: { center_x_m: 1.75, center_y_m: -1.0, size_x_m: 1.55, size_y_m: 0.18, size_h_m: 0.06 },
-    returnLoop: { center_x_m: 2.30, center_y_m: 0.0, radius_m: 1.10, tube_m: 0.05 },
-    returnChute: { center_x_m: 1.65, center_y_m: -1.0, size_x_m: 1.00, size_y_m: 0.16, size_h_m: 0.05 }
+    dirtyRack: { x_m: -0.80, y_m: 0.70, z_m: 0.0 },
+    cleanRack: { x_m: -0.80, y_m: -0.70, z_m: 0.0 },
+    washerLoad: { x_m: 0.85, y_m: 0.60, z_m: 0.5 },
+    washerReturn: { x_m: 0.85, y_m: -0.60, z_m: 0.5 },
+    washerBody: { center_x_m: 2.35, center_y_m: 0.0, size_x_m: 1.35, size_y_m: 0.72, size_h_m: 0.60 },
+    conveyorUpper: { center_x_m: 1.60, center_y_m: 0.60, size_x_m: 1.50, size_y_m: 0.18, size_h_m: 0.06 },
+    conveyorLower: { center_x_m: 1.60, center_y_m: -0.60, size_x_m: 1.50, size_y_m: 0.18, size_h_m: 0.06 },
+    returnLoop: { center_x_m: 2.10, center_y_m: 0.0, radius_m: 0.70, tube_m: 0.05 },
+    returnChute: { center_x_m: 1.35, center_y_m: -0.60, size_x_m: 1.00, size_y_m: 0.16, size_h_m: 0.05 }
 };
 const TRAY_BASE_DIMS = { x_m: 0.40, y_m: 0.40, z_m: 0.05 }; // x/y: tray footprint, z: thickness (meters)
 const worldZFromPlantY = (yLike, fallback = 0) => -asNumber(yLike, fallback);
@@ -1006,16 +1006,6 @@ async function buildThreeApp(THREE, OrbitControls, URDFLoaderClass = null) {
                     dz / 2 + Math.max(0.0, asNumber(pp.z_m, fallbackLayout.z_m)),
                     worldZFromPlantY(pp.y_m, fallbackLayout.y_m)
                 );
-                const tcpTruth = new THREE.Vector3(mapped.x, mapped.y, mapped.z);
-                const carrySideHint = targetGoal.x <= 0 ? 1 : -1;
-                const sideContactTruth = new THREE.Vector3(
-                    tcpTruth.x + carrySideHint * (dx / 2 + 0.06),
-                    Math.max(dz / 2 + 0.01, tcpTruth.y),
-                    tcpTruth.z
-                );
-                const pickupCloseEnough = sideContactTruth.distanceTo(targetGoal) < 0.035;
-                const isCarryingState = carryingStates.has(stateCode) || stateCode === 'MOVING_TO_PLACE' || stateCode === 'RELEASING_LOAD';
-                const carryEligible = !!data.grip?.sealed && isCarryingState;
                 // Strict rule: once the tray is (or is about to be) attached as a child of the
                 // end-effector, ignore backend absolute tray pose updates to avoid pose conflicts.
                 // The tray should move only via parent-child transform inheritance until detached.
@@ -1031,15 +1021,6 @@ async function buildThreeApp(THREE, OrbitControls, URDFLoaderClass = null) {
                     // Keep trayGoal stable while attached; world pose is controlled by ee.attach().
                     trayGoal.copy(trayVisualPos);
                 } else {
-                    if (!trayAttached && carryEligible && pickupCloseEnough) {
-                        trayAttached = true;
-                        trayAttachBlend = 0;
-                    }
-                    if (trayAttached && !carryEligible) {
-                        trayAttached = false;
-                        trayAttachBlend = 0;
-                    }
-
                     if (trayAttached) {
                         // While attached, let parent-child transform control tray motion.
                         trayGoal.copy(trayVisualPos);

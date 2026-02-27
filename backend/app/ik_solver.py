@@ -129,7 +129,7 @@ class CRX20IkPySolver:
                     )
                     orient_kwargs = dict(kwargs)
                     orient_kwargs["target_orientation"] = rot
-                    orient_kwargs["orientation_mode"] = "all"
+                    orient_kwargs["orientation_mode"] = "X"
                     try:
                         solution = self._chain.inverse_kinematics(**orient_kwargs)
                     except Exception:

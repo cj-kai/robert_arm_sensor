@@ -230,13 +230,13 @@ class SidePickState(str, Enum):
 
 @dataclass
 class WorkcellLayout:
-    dirty_rack_pick: Vec3 = field(default_factory=lambda: Vec3(-1.50, 1.20, 0.80))
-    clean_rack_place_base: Vec3 = field(default_factory=lambda: Vec3(-1.50, -1.20, 0.80))
-    washer_infeed: Vec3 = field(default_factory=lambda: Vec3(1.20, 1.00, 0.50))
-    return_pick: Vec3 = field(default_factory=lambda: Vec3(1.20, -1.00, 0.50))
-    dirty_observe: Vec3 = field(default_factory=lambda: Vec3(-1.80, 0.95, 0.95))
-    return_observe: Vec3 = field(default_factory=lambda: Vec3(0.95, -1.30, 0.95))
-    safe_home: Vec3 = field(default_factory=lambda: Vec3(0.60, 0.0, 0.90))
+    dirty_rack_pick: Vec3 = field(default_factory=lambda: Vec3(-0.80, 0.70, 0.80))
+    clean_rack_place_base: Vec3 = field(default_factory=lambda: Vec3(-0.80, -0.70, 0.80))
+    washer_infeed: Vec3 = field(default_factory=lambda: Vec3(0.85, 0.60, 0.50))
+    return_pick: Vec3 = field(default_factory=lambda: Vec3(0.85, -0.60, 0.50))
+    dirty_observe: Vec3 = field(default_factory=lambda: Vec3(-0.80, 0.55, 0.95))
+    return_observe: Vec3 = field(default_factory=lambda: Vec3(0.85, -0.45, 0.95))
+    safe_home: Vec3 = field(default_factory=lambda: Vec3(0.50, 0.0, 0.90))
 
 
 @dataclass
