@@ -1,21 +1,30 @@
-# Edge Deployment Notes (Phase 1)
+# Edge Deployment Notes (Phase-1)
 
-This folder is a placeholder for edge-PC deployment assets for the phase-1 stack:
+本目录用于记录“边缘工控机/现场 PC”部署方案（真机接入阶段）。
 
-- `gateway/` Node.js API + WS gateway (frontend-facing)
-- `backend/` Python execution service (FSM + adapters)
-- ROS 2 / FANUC driver running on the host machine
+## 1. 推荐运行拆分
 
-## Recommended runtime split
+1. ROS2 + FANUC Driver：先运行在主机（不强制容器化）  
+2. Python Execution Service：主机或容器均可  
+3. Node Gateway：主机或容器均可  
+4. 前端统一从 Gateway 访问（只对外开放 Gateway 端口）
 
-1. Run ROS 2 + FANUC driver on host (not containerized initially).
-2. Run Python execution service on host or container.
-3. Run Node gateway on host or container.
-4. Open only the gateway port to clients.
+## 2. 组件职责
 
-## Systemd unit placeholders to add later
+- `gateway/`：对前端提供稳定 API/WS，做代理、降级、命令串行化  
+- `backend/`：运行 FSM、IK、适配器（视觉/机器人/真空/输送）  
+- `ROS2/FANUC`：真机控制与状态回读（下一阶段）
+
+## 3. 现场部署建议
+
+1. 首次联调先用主机直跑，缩短排障路径。  
+2. 真机稳定后再考虑容器化与 systemd 守护。  
+3. 生产环境将实时控制网络与办公网络隔离。  
+4. 保留急停、围栏和低速调试策略。
+
+## 4. 预留 systemd 服务名（建议）
 
 - `crx-gateway.service`
 - `crx-exec.service`
-- `crx-ros-bridge.service` (optional wrapper if needed)
+- `crx-ros-driver.service`
 
