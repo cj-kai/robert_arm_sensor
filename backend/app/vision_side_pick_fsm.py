@@ -230,13 +230,13 @@ class SidePickState(str, Enum):
 
 @dataclass
 class WorkcellLayout:
-    dirty_rack_pick: Vec3 = field(default_factory=lambda: Vec3(-0.80, 0.70, 0.80))
-    clean_rack_place_base: Vec3 = field(default_factory=lambda: Vec3(-0.80, -0.70, 0.80))
-    washer_infeed: Vec3 = field(default_factory=lambda: Vec3(0.85, 0.60, 0.50))
-    return_pick: Vec3 = field(default_factory=lambda: Vec3(0.85, -0.60, 0.50))
-    dirty_observe: Vec3 = field(default_factory=lambda: Vec3(-0.80, 0.55, 0.95))
-    return_observe: Vec3 = field(default_factory=lambda: Vec3(0.85, -0.45, 0.95))
-    safe_home: Vec3 = field(default_factory=lambda: Vec3(0.50, 0.0, 0.90))
+    dirty_rack_pick: Vec3 = field(default_factory=lambda: Vec3(-0.75, 0.75, 0.80))
+    clean_rack_place_base: Vec3 = field(default_factory=lambda: Vec3(-0.75, -0.75, 0.80))
+    washer_infeed: Vec3 = field(default_factory=lambda: Vec3(0.80, 0.60, 0.50))
+    return_pick: Vec3 = field(default_factory=lambda: Vec3(0.80, -0.60, 0.50))
+    dirty_observe: Vec3 = field(default_factory=lambda: Vec3(-0.85, 0.55, 0.95))
+    return_observe: Vec3 = field(default_factory=lambda: Vec3(0.65, -0.75, 0.95))
+    safe_home: Vec3 = field(default_factory=lambda: Vec3(0.40, 0.0, 0.90))
 
 
 @dataclass
@@ -463,10 +463,11 @@ class VisionGuidedSidePickFSM:
         if self._ik_solver is not None and hasattr(self._ik_solver, "reset_seed"):
             self._ik_solver.reset_seed(self._joint_angles_rad)
         # `target` is the detected tray side-center (not tray center) in world coordinates.
-        q = self._side_pick_quat
         approach_sign = self._approach_sign_for_target(target)
+        q = self._get_dynamic_quat(approach_sign)
         standoff = self._approach_standoff_m()
-        contact = Vec3(target.x + approach_sign * self.cfg.tcp_offset_m, target.y, target.z)
+        # Direct side contact without extra TCP offset compensation.
+        contact = Vec3(target.x, target.y, target.z)
         pre = Vec3(contact.x + approach_sign * standoff, contact.y, contact.z)
         lift = Vec3(contact.x, contact.y, contact.z + self.cfg.retreat_lift_m)
         retreat = Vec3(pre.x, pre.y, lift.z)
@@ -478,7 +479,7 @@ class VisionGuidedSidePickFSM:
         retreat_pose = self._solve_ik_with_locked_orientation(retreat, q)
 
         # tray_center = ee_flange + tool_offset while suction is attached
-        tray_side_offset = Vec3(-approach_sign * (tray.dims_m.x / 2.0 + self.cfg.tcp_offset_m), 0.0, 0.0)
+        tray_side_offset = Vec3(-approach_sign * (tray.dims_m.x / 2.0), 0.0, 0.0)
 
         def on_vacuum_on() -> None:
             self.vacuum.turn_on()
@@ -504,13 +505,13 @@ class VisionGuidedSidePickFSM:
         # Reset IK seed per planned sequence to reduce branch drift across cycles.
         if self._ik_solver is not None and hasattr(self._ik_solver, "reset_seed"):
             self._ik_solver.reset_seed(self._joint_angles_rad)
-        q = self._side_pick_quat
         infeed = self.layout.washer_infeed
         # infeed.z is conveyor plane height; tray center must include half thickness.
         target_tray_center = Vec3(infeed.x, infeed.y, infeed.z + tray.dims_m.z / 2.0)
         approach_sign = self._approach_sign_for_target(target_tray_center)
+        q = self._get_dynamic_quat(approach_sign)
         contact = Vec3(
-            target_tray_center.x + approach_sign * (tray.dims_m.x / 2.0 + self.cfg.tcp_offset_m),
+            target_tray_center.x + approach_sign * (tray.dims_m.x / 2.0),
             target_tray_center.y,
             target_tray_center.z,
         )
@@ -529,7 +530,7 @@ class VisionGuidedSidePickFSM:
             tray.is_clean = False
             # Release at the exact infeed center so washer path takeover starts from
             # the same coordinate (prevents visible handoff "teleport").
-            exact_infeed_pose = self._make_pose(target_tray_center, self._side_pick_quat)
+            exact_infeed_pose = self._make_pose(target_tray_center, q)
             tray.release_from_tool(exact_infeed_pose)
             self._washer_tray = tray
             self._active_tray = None
@@ -785,6 +786,13 @@ class VisionGuidedSidePickFSM:
             true_pos.y + random.uniform(-n, n),
             true_pos.z,
         )
+
+    def _get_dynamic_quat(self, approach_sign: float) -> Quat:
+        base_q = self._side_pick_quat
+        if approach_sign < 0:
+            # Flip yaw by 180 deg when crossing the centerline.
+            return Quat(base_q.y, -base_q.x, base_q.w, -base_q.z).normalized()
+        return Quat(base_q.x, base_q.y, base_q.z, base_q.w)
 
     def _solve_ik_with_locked_orientation(self, pos: Vec3, locked_quat: Quat) -> Pose:
         """IK placeholder for current sim platform.

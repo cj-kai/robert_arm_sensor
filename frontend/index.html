@@ -281,15 +281,15 @@ const btnStop = document.getElementById('btn-stop');
 const btnReset = document.getElementById('btn-reset');
 
 const WORKCELL_LAYOUT = {
-    dirtyRack: { x_m: -0.80, y_m: 0.70, z_m: 0.0 },
-    cleanRack: { x_m: -0.80, y_m: -0.70, z_m: 0.0 },
-    washerLoad: { x_m: 0.85, y_m: 0.60, z_m: 0.5 },
-    washerReturn: { x_m: 0.85, y_m: -0.60, z_m: 0.5 },
-    washerBody: { center_x_m: 2.35, center_y_m: 0.0, size_x_m: 1.35, size_y_m: 0.72, size_h_m: 0.60 },
-    conveyorUpper: { center_x_m: 1.60, center_y_m: 0.60, size_x_m: 1.50, size_y_m: 0.18, size_h_m: 0.06 },
-    conveyorLower: { center_x_m: 1.60, center_y_m: -0.60, size_x_m: 1.50, size_y_m: 0.18, size_h_m: 0.06 },
-    returnLoop: { center_x_m: 2.10, center_y_m: 0.0, radius_m: 0.70, tube_m: 0.05 },
-    returnChute: { center_x_m: 1.35, center_y_m: -0.60, size_x_m: 1.00, size_y_m: 0.16, size_h_m: 0.05 }
+    dirtyRack: { x_m: -0.75, y_m: 0.75, z_m: 0.0 },
+    cleanRack: { x_m: -0.75, y_m: -0.75, z_m: 0.0 },
+    washerLoad: { x_m: 0.80, y_m: 0.60, z_m: 0.5 },
+    washerReturn: { x_m: 0.80, y_m: -0.60, z_m: 0.5 },
+    washerBody: { center_x_m: 2.65, center_y_m: 0.0, size_x_m: 1.35, size_y_m: 0.72, size_h_m: 0.60 },
+    conveyorUpper: { center_x_m: 1.725, center_y_m: 0.60, size_x_m: 2.00, size_y_m: 0.18, size_h_m: 0.06 },
+    conveyorLower: { center_x_m: 1.725, center_y_m: -0.60, size_x_m: 2.00, size_y_m: 0.18, size_h_m: 0.06 },
+    returnLoop: { center_x_m: 2.65, center_y_m: 0.0, radius_m: 0.60, tube_m: 0.05 },
+    returnChute: { center_x_m: 1.65, center_y_m: -0.60, size_x_m: 1.00, size_y_m: 0.16, size_h_m: 0.05 }
 };
 const TRAY_BASE_DIMS = { x_m: 0.40, y_m: 0.40, z_m: 0.05 }; // x/y: tray footprint, z: thickness (meters)
 const worldZFromPlantY = (yLike, fallback = 0) => -asNumber(yLike, fallback);
@@ -598,8 +598,13 @@ async function buildThreeApp(THREE, OrbitControls, URDFLoaderClass = null) {
         scene.updateMatrixWorld(true);
         ee.updateMatrixWorld(true);
         if (shouldAttach) {
-            // Keep world transform continuity via parent switch only.
-            ee.attach(tray);
+            ee.add(tray);
+            const eeWorld = new THREE.Vector3();
+            ee.getWorldPosition(eeWorld);
+            const isRightSide = eeWorld.x > 0;
+            const approachSign = isRightSide ? -1 : 1;
+            tray.position.set(-approachSign * (trayDimsCurrent.x / 2.0), 0, 0);
+            tray.rotation.set(0, 0, 0);
         } else {
             scene.attach(tray); // preserve world transform while returning to scene root
         }
@@ -993,9 +998,10 @@ async function buildThreeApp(THREE, OrbitControls, URDFLoaderClass = null) {
                 const cycleId = String(data.task?.cycle_id || '');
                 if (cycleId !== trayCycleId) {
                     trayCycleId = cycleId;
-                    trayAttached = false;
-                    trayAttachBlend = 0;
                 }
+                // Single source of truth: backend binding state.
+                trayAttached = backendBoundToTool;
+                trayAttachBlend = trayAttached ? 1 : 0;
                 const targetGoal = new THREE.Vector3(
                     asNumber(tp.x_m, WORKCELL_LAYOUT.dirtyRack.x_m),
                     dz / 2 + Math.max(0.0, asNumber(tp.z_m, WORKCELL_LAYOUT.dirtyRack.z_m)),
@@ -1013,12 +1019,8 @@ async function buildThreeApp(THREE, OrbitControls, URDFLoaderClass = null) {
                 const ignoreBackendTrayPose = trayAttachedVisual || backendBoundToTool;
                 if (hasBackendTrayPose && !ignoreBackendTrayPose) {
                     trayGoal.set(backendTrayMapped.x, Math.max(dz / 2, backendTrayMapped.y), backendTrayMapped.z);
-                    trayAttached = backendBoundToTool;
-                    trayAttachBlend = trayAttached ? 1 : 0;
                 } else if (hasBackendTrayPose) {
-                    trayAttached = backendBoundToTool;
-                    trayAttachBlend = trayAttached ? 1 : 0;
-                    // Keep trayGoal stable while attached; world pose is controlled by ee.attach().
+                    // Keep trayGoal stable while attached; world pose is controlled by tool parenting.
                     trayGoal.copy(trayVisualPos);
                 } else {
                     if (trayAttached) {
@@ -1044,7 +1046,7 @@ async function buildThreeApp(THREE, OrbitControls, URDFLoaderClass = null) {
                 const detachEdge = trayAttachedVisual && (!tray.visible || !trayAttached);
                 if (attachEdge && backendTrayMapped) {
                     // Snap to backend-provided tray pose right before reparenting.
-                    // This avoids preserving stale pre-contact offset when ee.attach() runs.
+                    // This avoids preserving stale pre-contact offset when local parenting runs.
                     trayVisualPos.set(
                         backendTrayMapped.x,
                         Math.max(dz / 2, backendTrayMapped.y),

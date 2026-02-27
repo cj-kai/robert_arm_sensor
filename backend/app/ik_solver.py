@@ -113,29 +113,30 @@ class CRX20IkPySolver:
                 "initial_position": self._last_solution,
             }
 
-            solution = None
             if side_pick_quat_xyzw is not None and len(side_pick_quat_xyzw) == 4:
                 x, y, z, w = [float(v) for v in side_pick_quat_xyzw]
                 norm = float(np.sqrt(x * x + y * y + z * z + w * w))
-                if norm > 1e-9:
-                    x, y, z, w = x / norm, y / norm, z / norm, w / norm
-                    rot = np.array(
-                        [
-                            [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
-                            [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
-                            [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)],
-                        ],
-                        dtype=float,
-                    )
-                    orient_kwargs = dict(kwargs)
-                    orient_kwargs["target_orientation"] = rot
-                    orient_kwargs["orientation_mode"] = "X"
-                    try:
-                        solution = self._chain.inverse_kinematics(**orient_kwargs)
-                    except Exception:
-                        solution = None
-
-            if solution is None:
+                if norm <= 1e-9:
+                    return IKResult(False, [0.0] * 6, "IK Failed: invalid orientation quaternion")
+                x, y, z, w = x / norm, y / norm, z / norm, w / norm
+                rot = np.array(
+                    [
+                        [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+                        [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+                        [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)],
+                    ],
+                    dtype=float,
+                )
+                orient_kwargs = dict(kwargs)
+                orient_kwargs["target_orientation"] = rot
+                orient_kwargs["orientation_mode"] = "all"
+                try:
+                    solution = self._chain.inverse_kinematics(**orient_kwargs)
+                except Exception:
+                    return IKResult(False, [0.0] * 6, "IK Failed: Unreachable with strict orientation")
+                if solution is None:
+                    return IKResult(False, [0.0] * 6, "IK Failed: No strict orientation solution")
+            else:
                 solution = self._chain.inverse_kinematics(**kwargs)
 
             full = np.asarray(solution, dtype=float)
