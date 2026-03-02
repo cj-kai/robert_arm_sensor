@@ -210,10 +210,13 @@ class TrajectorySequence:
         if self.t >= seg.duration_s:
             if seg.on_complete:
                 seg.on_complete()
+            end_pose = seg.end.copy()
             self.index += 1
             self.t = 0.0
             self._started = False
-            if self.index >= len(self.segments):
+            if self.index < len(self.segments):
+                self.segments[self.index].start = end_pose
+            else:
                 self.finished = True
         return pose
 
@@ -230,13 +233,13 @@ class SidePickState(str, Enum):
 
 @dataclass
 class WorkcellLayout:
-    dirty_rack_pick: Vec3 = field(default_factory=lambda: Vec3(-0.75, 0.75, 0.80))
-    clean_rack_place_base: Vec3 = field(default_factory=lambda: Vec3(-0.75, -0.75, 0.80))
+    dirty_rack_pick: Vec3 = field(default_factory=lambda: Vec3(-1.05, 0.75, 1.30))
+    clean_rack_place_base: Vec3 = field(default_factory=lambda: Vec3(-1.05, -0.75, 1.30))
     washer_infeed: Vec3 = field(default_factory=lambda: Vec3(0.80, 0.60, 0.50))
     return_pick: Vec3 = field(default_factory=lambda: Vec3(0.80, -0.60, 0.50))
-    dirty_observe: Vec3 = field(default_factory=lambda: Vec3(-0.85, 0.55, 0.95))
+    dirty_observe: Vec3 = field(default_factory=lambda: Vec3(-1.15, 0.55, 1.45))
     return_observe: Vec3 = field(default_factory=lambda: Vec3(0.65, -0.75, 0.95))
-    safe_home: Vec3 = field(default_factory=lambda: Vec3(0.40, 0.0, 0.90))
+    safe_home: Vec3 = field(default_factory=lambda: Vec3(0.40, 0.0, 1.10))
 
 
 @dataclass
@@ -244,7 +247,7 @@ class SidePickConfig:
     # Side-pick approach geometry
     tcp_offset_m: float = 0.045  # flange/tool origin to suction contact point (align with frontend TCP marker)
     pregrasp_offset_x_m: float = 0.15
-    approach_standoff_m: float = 0.15  # preferred replacement for pregrasp_offset_x_m
+    approach_standoff_m: float = 0.20  # preferred replacement for pregrasp_offset_x_m
     retreat_lift_m: float = 0.02
     contact_dwell_s: float = 0.20
     release_dwell_s: float = 0.15
@@ -298,6 +301,7 @@ class VisionGuidedSidePickFSM:
         self._washer_elapsed_s = 0.0
         self._last_placed_clean_tray: Optional[SimTray] = None
         self._post_place_clean_hold_until_s = 0.0
+        self._last_dt = 0.02
         self._dirty_trays = self._make_initial_dirty_trays()
         self._init_ik_solver()
         self._update_joint_solution_from_ee_pose()
@@ -306,6 +310,7 @@ class VisionGuidedSidePickFSM:
 
     def step(self, dt: float) -> None:
         dt = max(0.0, min(dt, 0.1))
+        self._last_dt = dt
         self.sim_time_s += dt
         self.vision.update_scan(dt)
 
@@ -693,7 +698,7 @@ class VisionGuidedSidePickFSM:
             arc_exit = Vec3(arc_center_x - arc_radius, arc_center_y - arc_radius, z)
             pos = Vec3(arc_exit.x + (e.x - arc_exit.x) * t, arc_exit.y + (e.y - arc_exit.y) * t, z)
 
-        tray.pose = Pose(pos=pos, quat=self._side_pick_quat)
+        tray.pose = Pose(pos=pos, quat=Quat(0.0, 0.0, 0.0, 1.0))
         self._washer_elapsed_s = min(cycle_s, self._washer_elapsed_s + max(0.0, dt))
         if self._washer_elapsed_s >= cycle_s:
             tray.is_clean = True
@@ -710,6 +715,8 @@ class VisionGuidedSidePickFSM:
             ),
         )
 
+    MAX_JOINT_SPEED_RAD_S = 2.0
+
     def _apply_ee_pose(self, pose: Pose) -> None:
         self._ee_pose = pose
         self.robot.x = pose.pos.x
@@ -720,6 +727,16 @@ class VisionGuidedSidePickFSM:
         self.robot.pitch = pitch
         self.robot.yaw = yaw
         self._update_joint_solution_from_ee_pose()
+
+    def _clamp_joint_velocity(self, new_joints: list[float], dt: float) -> list[float]:
+        if not self._joint_angles_rad or dt <= 0:
+            return new_joints
+        max_delta = self.MAX_JOINT_SPEED_RAD_S * dt
+        clamped = []
+        for old, new in zip(self._joint_angles_rad, new_joints):
+            delta = max(-max_delta, min(max_delta, new - old))
+            clamped.append(old + delta)
+        return clamped
 
     def _init_ik_solver(self) -> None:
         if self._ik_solver is not None:
@@ -756,10 +773,9 @@ class VisionGuidedSidePickFSM:
                 self._ik_warned = True
             return
 
-        # The FSM trajectory is already time-interpolated in Cartesian space.
-        # Applying an extra low-pass filter in joint space introduces visual lag,
-        # causing "remote suction" and release teleport artifacts in the frontend.
-        self._joint_angles_rad = [float(v) for v in res.joints_rad]
+        self._joint_angles_rad = self._clamp_joint_velocity(
+            [float(v) for v in res.joints_rad], self._last_dt
+        )
 
     def _make_pose(self, pos: Vec3, quat: Quat) -> Pose:
         return Pose(pos.copy(), quat)

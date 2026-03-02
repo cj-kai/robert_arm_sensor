@@ -213,6 +213,7 @@ class SystemState:
     payload: dict = field(default_factory=_default_payload)
     washer: dict = field(default_factory=_default_washer)
     tray_body: dict = field(default_factory=_default_tray_body)
+    trajectory_preview: list = field(default_factory=list)
 
     def add_log(self, level: LogLevel, code: str, msg: str) -> None:
         entry = LogEntry(ts=time.time(), level=level, code=code, msg=msg)
@@ -252,6 +253,7 @@ class SystemState:
             "payload": self.payload,
             "washer": self.washer,
             "tray_body": self.tray_body,
+            "trajectory_preview": self.trajectory_preview,
         }
 
 

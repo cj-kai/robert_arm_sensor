@@ -237,6 +237,17 @@ class SidePickExecutionFSM:
         self.state.safety = {"web_motion_allowed": False, "manual_jog_enabled": False}
         self.state.calibration = dict(self._calibration_status)
 
+        traj = self.core._traj
+        if traj and traj.segments:
+            pts = []
+            for seg in traj.segments:
+                pts.append({"x_m": seg.start.pos.x, "y_m": seg.start.pos.y, "z_m": seg.start.pos.z})
+            last = traj.segments[-1]
+            pts.append({"x_m": last.end.pos.x, "y_m": last.end.pos.y, "z_m": last.end.pos.z})
+            self.state.trajectory_preview = pts
+        else:
+            self.state.trajectory_preview = []
+
         if self.core.state == SidePickState.FAULT:
             self.state.fault = {"active": True, "code": "SIDE_PICK_FAULT", "msg": self.core.last_error or "Side-pick FSM fault"}
         else:

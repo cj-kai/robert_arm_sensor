@@ -143,6 +143,27 @@ class CRX20IkPySolver:
             if full.shape[0] != len(self._chain.links):
                 return IKResult(False, [0.0] * 6, "Unexpected ikpy solution length")
 
+            # Anti-jump: if any joint moved more than ~28 deg in one solve,
+            # re-solve with a perturbed seed biased toward the new target and
+            # keep whichever solution has smaller max joint change.
+            joints_new = [float(full[idx]) for idx in self._joint_indices]
+            joints_old = [float(self._last_solution[idx]) for idx in self._joint_indices]
+            max_delta = max(abs(a - b) for a, b in zip(joints_new, joints_old))
+            if max_delta > 0.5:
+                perturbed_seed = self._last_solution.copy()
+                for j_idx, chain_idx in enumerate(self._joint_indices):
+                    perturbed_seed[chain_idx] += 0.3 * (joints_new[j_idx] - joints_old[j_idx])
+                retry_kwargs = dict(kwargs)
+                retry_kwargs["initial_position"] = perturbed_seed
+                try:
+                    solution2 = self._chain.inverse_kinematics(**retry_kwargs)
+                    joints2 = [float(solution2[idx]) for idx in self._joint_indices]
+                    delta2 = max(abs(a - b) for a, b in zip(joints2, joints_old))
+                    if delta2 < max_delta:
+                        full = np.asarray(solution2, dtype=float)
+                except Exception:
+                    pass
+
             self._last_solution = full
             joints = [float(full[idx]) for idx in self._joint_indices]
             return IKResult(True, joints)

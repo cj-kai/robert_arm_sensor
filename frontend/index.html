@@ -281,8 +281,8 @@ const btnStop = document.getElementById('btn-stop');
 const btnReset = document.getElementById('btn-reset');
 
 const WORKCELL_LAYOUT = {
-    dirtyRack: { x_m: -0.75, y_m: 0.75, z_m: 0.0 },
-    cleanRack: { x_m: -0.75, y_m: -0.75, z_m: 0.0 },
+    dirtyRack: { x_m: -1.05, y_m: 0.75, z_m: 0.0 },
+    cleanRack: { x_m: -1.05, y_m: -0.75, z_m: 0.0 },
     washerLoad: { x_m: 0.80, y_m: 0.60, z_m: 0.5 },
     washerReturn: { x_m: 0.80, y_m: -0.60, z_m: 0.5 },
     washerBody: { center_x_m: 2.65, center_y_m: 0.0, size_x_m: 1.35, size_y_m: 0.72, size_h_m: 0.60 },
@@ -399,6 +399,8 @@ async function buildThreeApp(THREE, OrbitControls, URDFLoaderClass = null) {
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(width, height);
     renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     container.querySelectorAll('canvas').forEach((c) => c.remove());
     container.appendChild(renderer.domElement);
 
@@ -409,8 +411,26 @@ async function buildThreeApp(THREE, OrbitControls, URDFLoaderClass = null) {
     // Lights
     scene.add(new THREE.AmbientLight(0xffffff, 0.55));
     const dir = new THREE.DirectionalLight(0xffffff, 0.9);
-    dir.position.set(2, 2, 1);
+    dir.position.set(3, 4, 2);
+    dir.castShadow = true;
+    dir.shadow.mapSize.width = 1024;
+    dir.shadow.mapSize.height = 1024;
+    dir.shadow.camera.near = 0.1;
+    dir.shadow.camera.far = 12;
+    dir.shadow.camera.left = -4;
+    dir.shadow.camera.right = 4;
+    dir.shadow.camera.top = 4;
+    dir.shadow.camera.bottom = -4;
     scene.add(dir);
+
+    // Ground plane for shadow receiving
+    const groundGeo = new THREE.PlaneGeometry(14, 14);
+    const groundMat = new THREE.ShadowMaterial({ opacity: 0.18 });
+    const ground = new THREE.Mesh(groundGeo, groundMat);
+    ground.rotation.x = -Math.PI / 2;
+    ground.position.y = -0.001;
+    ground.receiveShadow = true;
+    scene.add(ground);
 
     // Helpers
     const axes = new THREE.AxesHelper(0.60);
@@ -531,6 +551,8 @@ async function buildThreeApp(THREE, OrbitControls, URDFLoaderClass = null) {
         trayMat
     );
     tray.position.set(WORKCELL_LAYOUT.dirtyRack.x_m, TRAY_BASE_DIMS.z_m / 2, worldZFromPlantY(WORKCELL_LAYOUT.dirtyRack.y_m));
+    tray.castShadow = true;
+    tray.receiveShadow = true;
     scene.add(tray);
 
     const placeZone = new THREE.Mesh(
@@ -607,6 +629,7 @@ async function buildThreeApp(THREE, OrbitControls, URDFLoaderClass = null) {
             tray.rotation.set(0, 0, 0);
         } else {
             scene.attach(tray); // preserve world transform while returning to scene root
+            tray.rotation.set(0, 0, 0); // force flat orientation after release
         }
         trayAttachedVisual = shouldAttach;
     };
@@ -787,6 +810,8 @@ async function buildThreeApp(THREE, OrbitControls, URDFLoaderClass = null) {
 
     const dirtyRackCart = createRackCart(0xef4444);
     const cleanRackCart = createRackCart(0x22c55e);
+    dirtyRackCart.traverse(c => { if (c.isMesh) { c.castShadow = true; c.receiveShadow = true; } });
+    cleanRackCart.traverse(c => { if (c.isMesh) { c.castShadow = true; c.receiveShadow = true; } });
     const dirtyStack = createTrayStack(4, 0xffffff);
     const dirtyBin = new THREE.Mesh(
         new THREE.BoxGeometry(0.48, 0.16, 0.34),
@@ -868,6 +893,64 @@ async function buildThreeApp(THREE, OrbitControls, URDFLoaderClass = null) {
         worldZFromPlantY(WORKCELL_LAYOUT.returnLoop.center_y_m)
     );
 
+    // Trajectory preview line (shows planned path segments)
+    const trajLineMat = new THREE.LineBasicMaterial({ color: 0x60a5fa, transparent: true, opacity: 0.7, linewidth: 2 });
+    const trajLineGeo = new THREE.BufferGeometry();
+    const trajLine = new THREE.Line(trajLineGeo, trajLineMat);
+    trajLine.visible = false;
+    scene.add(trajLine);
+
+    // Conveyor belt animation textures
+    const beltCanvas = document.createElement('canvas');
+    beltCanvas.width = 128;
+    beltCanvas.height = 32;
+    const beltCtx = beltCanvas.getContext('2d');
+    beltCtx.fillStyle = '#1e293b';
+    beltCtx.fillRect(0, 0, 128, 32);
+    for (let i = 0; i < 8; i++) {
+        beltCtx.fillStyle = '#334155';
+        beltCtx.fillRect(i * 16, 0, 8, 32);
+    }
+    const beltTexture = new THREE.CanvasTexture(beltCanvas);
+    beltTexture.wrapS = THREE.RepeatWrapping;
+    beltTexture.wrapT = THREE.RepeatWrapping;
+    beltTexture.repeat.set(4, 1);
+    conveyorUpper.material = new THREE.MeshStandardMaterial({ map: beltTexture, roughness: 0.85, metalness: 0.05 });
+    conveyorLower.material = conveyorUpper.material.clone();
+    conveyorLower.material.map = beltTexture.clone();
+    conveyorLower.material.map.wrapS = THREE.RepeatWrapping;
+    conveyorLower.material.map.wrapT = THREE.RepeatWrapping;
+    conveyorLower.material.map.repeat.set(4, 1);
+    let beltAnimOffset = 0;
+
+    // Joint angle gauge HUD (6 gauges for J1-J6)
+    const jointGaugeContainer = document.createElement('div');
+    jointGaugeContainer.style.cssText = 'position:absolute;right:12px;bottom:10px;z-index:3;pointer-events:none;display:flex;gap:6px;';
+    container.appendChild(jointGaugeContainer);
+    const jointGauges = [];
+    const JOINT_LIMITS_DEG = [180, 180, 270, 190, 180, 225];
+    for (let i = 0; i < 6; i++) {
+        const wrap = document.createElement('div');
+        wrap.style.cssText = 'text-align:center;';
+        const label = document.createElement('div');
+        label.style.cssText = 'font:bold 9px/1 system-ui;color:#64748b;';
+        label.textContent = 'J' + (i + 1);
+        const bar = document.createElement('div');
+        bar.style.cssText = 'width:24px;height:48px;background:#1e293b;border:1px solid #334155;border-radius:3px;position:relative;overflow:hidden;margin-top:2px;';
+        const fill = document.createElement('div');
+        fill.style.cssText = 'position:absolute;bottom:0;left:0;right:0;background:#3b82f6;transition:height 0.15s;';
+        fill.style.height = '50%';
+        bar.appendChild(fill);
+        const val = document.createElement('div');
+        val.style.cssText = 'font:9px/1 monospace;color:#94a3b8;margin-top:1px;';
+        val.textContent = '0';
+        wrap.appendChild(label);
+        wrap.appendChild(bar);
+        wrap.appendChild(val);
+        jointGaugeContainer.appendChild(wrap);
+        jointGauges.push({ fill, val, limit: JOINT_LIMITS_DEG[i] });
+    }
+
     const mapPose = (pose) => ({
         x: asNumber(pose.x_m, 0),
         y: asNumber(pose.z_m, 0.3),
@@ -897,6 +980,7 @@ async function buildThreeApp(THREE, OrbitControls, URDFLoaderClass = null) {
             urdfRobot.position.set(0, 0, 0);
             // FANUC URDF is authored in ROS Z-up; rotate into Three.js Y-up scene.
             urdfRobot.rotation.set(-Math.PI / 2, 0, 0);
+            urdfRobot.traverse(c => { if (c.isMesh) { c.castShadow = true; c.receiveShadow = true; } });
             scene.add(urdfRobot);
             fallbackRoot.visible = false;
 
@@ -1039,7 +1123,7 @@ async function buildThreeApp(THREE, OrbitControls, URDFLoaderClass = null) {
                     }
                 }
 
-                const trayFollowAlpha = hasBackendTrayPose ? (trayAttached ? 0.42 : 0.30) : (trayAttached ? 0.28 : (washerBusy ? 0.16 : 0.22));
+                const trayFollowAlpha = hasBackendTrayPose ? (trayAttached ? 0.42 : 0.35) : (trayAttached ? 0.28 : (washerBusy ? 0.45 : 0.22));
                 tray.visible = !!(backendTrayBody.visible ?? true);
                 marker.visible = tray.visible;
                 const attachEdge = tray.visible && trayAttached && !trayAttachedVisual;
@@ -1119,14 +1203,48 @@ async function buildThreeApp(THREE, OrbitControls, URDFLoaderClass = null) {
                 } else {
                     armLine.visible = false;
                 }
+
+                // Joint gauge update
+                if (Array.isArray(data.joint_angles_rad) && data.joint_angles_rad.length >= 6) {
+                    for (let i = 0; i < 6; i++) {
+                        const rad = asNumber(data.joint_angles_rad[i], 0);
+                        const deg = rad * 180 / Math.PI;
+                        const g = jointGauges[i];
+                        const pct = Math.min(100, Math.max(0, (Math.abs(deg) / g.limit) * 100));
+                        g.fill.style.height = pct + '%';
+                        g.fill.style.background = pct > 85 ? '#ef4444' : pct > 60 ? '#f59e0b' : '#3b82f6';
+                        g.val.textContent = deg.toFixed(0) + '\u00b0';
+                    }
+                }
+
+                // Trajectory preview
+                const trajPts = data.trajectory_preview;
+                if (Array.isArray(trajPts) && trajPts.length >= 2) {
+                    const pts = trajPts.map(p => new THREE.Vector3(
+                        asNumber(p.x_m, 0),
+                        asNumber(p.z_m, 0),
+                        worldZFromPlantY(p.y_m, 0)
+                    ));
+                    trajLine.geometry.dispose();
+                    trajLine.geometry = new THREE.BufferGeometry().setFromPoints(pts);
+                    trajLine.visible = true;
+                } else {
+                    trajLine.visible = false;
+                }
             } catch (err) {
                 disableOnRuntimeError(err);
             }
         },
-        renderFrame() {
+        renderFrame(dtMs) {
             if (runtimeFailed) return;
             try {
                 controls.update();
+                const conveyorRunning = !!latest.washer?.busy;
+                if (conveyorRunning) {
+                    beltAnimOffset += (dtMs || 16) * 0.0003;
+                    if (conveyorUpper.material.map) conveyorUpper.material.map.offset.x = beltAnimOffset;
+                    if (conveyorLower.material.map) conveyorLower.material.map.offset.x = -beltAnimOffset;
+                }
                 renderer.render(scene, camera);
             } catch (err) {
                 disableOnRuntimeError(err);
@@ -1547,7 +1665,7 @@ function animate() {
 
     // Update 3D scene
     threeApp.updateScene(latest);
-    threeApp.renderFrame();
+    threeApp.renderFrame(dt * 1000);
 }
 animate();
 

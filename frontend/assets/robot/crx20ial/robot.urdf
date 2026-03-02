@@ -57,11 +57,17 @@
     <child link="base_link" />
   </joint>
 
+  <!-- 定义名为 J1 的旋转关节 (revolute) -->
   <joint name="J1" type="revolute">
+    <!-- 关节坐标原点相对于父连杆的位置（Z轴上方 0.245米），并且没有姿态旋转 -->
     <origin xyz="0 0 0.245" rpy="0 0 0" />
+    <!-- 指定父连杆为底座 base_link -->
     <parent link="base_link" />
+    <!-- 指定子连杆为被驱动的 J1_link -->
     <child link="J1_link" />
+    <!-- 定义关节是围绕自身的 Z 轴旋转的 -->
     <axis xyz="0 0 1" />
+    <!-- 定义关节的物理限制：旋转角度范围(-3.14到3.14弧度，约-180到180度)，最大力矩750牛米，最大速度1.39弧度/秒 -->
     <limit lower="-3.139847" upper="3.139847" effort="750" velocity="1.396263" />
   </joint>
 
