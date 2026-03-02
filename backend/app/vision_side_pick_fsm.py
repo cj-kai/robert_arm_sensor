@@ -6,7 +6,7 @@ import random
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Callable, Optional
+from typing import Callable, List, Optional, Tuple
 
 from .ik_solver import CRX20IkPySolver, IKResult, find_default_crx20_urdf_path
 from .simulator import RobotSim, VisionSim, VacuumSim
@@ -137,6 +137,161 @@ def interpolate_pose(start: Pose, end: Pose, t: float, lock_orientation: bool = 
     return Pose(pos=pos, quat=quat)
 
 
+TRAY_SIZE_PRESETS: List[Tuple[str, Vec3]] = [
+    ("large",  Vec3(0.46, 0.46, 0.055)),
+    ("medium", Vec3(0.40, 0.40, 0.050)),
+    ("small",  Vec3(0.30, 0.30, 0.040)),
+]
+
+
+@dataclass
+class DetectionResult:
+    detected: bool
+    pose: Optional[Vec3] = None
+    confidence: float = 0.0
+    bbox: Optional[dict] = None
+    noise_std_m: float = 0.0
+    latency_ms: float = 0.0
+    tray_size_label: str = ""
+
+
+class SimVisionSensor:
+    """Simulates an industrial camera detecting tray positions with noise."""
+
+    def __init__(
+        self,
+        noise_std_m: float = 0.005,
+        fail_prob: float = 0.05,
+        latency_range_ms: Tuple[float, float] = (50.0, 150.0),
+    ):
+        self.noise_std_m = noise_std_m
+        self.fail_prob = fail_prob
+        self.latency_range_ms = latency_range_ms
+        self._frame_id = 0
+        self._pending_result: Optional[DetectionResult] = None
+        self._pending_frames = 0
+
+    def detect(self, real_pos: Vec3, tray_size_label: str = "medium") -> DetectionResult:
+        self._frame_id += 1
+        latency = random.uniform(*self.latency_range_ms)
+
+        if random.random() < self.fail_prob:
+            return DetectionResult(
+                detected=False,
+                confidence=random.uniform(0.10, 0.45),
+                latency_ms=latency,
+                bbox={"x": 0, "y": 0, "w": 0, "h": 0},
+                tray_size_label=tray_size_label,
+            )
+
+        nx = random.gauss(0, self.noise_std_m)
+        ny = random.gauss(0, self.noise_std_m)
+        detected_pos = Vec3(real_pos.x + nx, real_pos.y + ny, real_pos.z)
+        conf = max(0.0, min(1.0, 0.92 + random.gauss(0, 0.03)))
+        img_cx = int(320 + (detected_pos.y * 180))
+        img_cy = int(240 - (detected_pos.z * 150))
+        bbox_w = int(90 + random.randint(-8, 8))
+        bbox_h = int(70 + random.randint(-6, 6))
+        bbox = {
+            "x": max(0, img_cx - bbox_w // 2),
+            "y": max(0, img_cy - bbox_h // 2),
+            "w": bbox_w,
+            "h": bbox_h,
+        }
+
+        return DetectionResult(
+            detected=True,
+            pose=detected_pos,
+            confidence=round(conf, 3),
+            bbox=bbox,
+            noise_std_m=self.noise_std_m,
+            latency_ms=round(latency, 1),
+            tray_size_label=tray_size_label,
+        )
+
+    @property
+    def frame_id(self) -> int:
+        return self._frame_id
+
+
+class SimProximitySensor:
+    """Simulates an end-effector proximity sensor."""
+
+    def __init__(self, grip_threshold_m: float = 0.03):
+        self.grip_threshold_m = grip_threshold_m
+        self.distance_m = float("inf")
+        self.triggered = False
+
+    def update(self, tcp_pos: Vec3, target_pos: Optional[Vec3]) -> None:
+        if target_pos is None:
+            self.distance_m = float("inf")
+            self.triggered = False
+            return
+        self.distance_m = tcp_pos.distance(target_pos)
+        self.triggered = self.distance_m < self.grip_threshold_m
+
+
+class SimForceSensor:
+    """Simulates a 6-axis force/torque sensor at the end-effector."""
+
+    GRAVITY_MPS2 = 9.81
+
+    def __init__(self):
+        self.fx = 0.0
+        self.fy = 0.0
+        self.fz = 0.0
+        self.tx = 0.0
+        self.ty = 0.0
+        self.tz = 0.0
+        self.payload_kg = 0.0
+        self._prev_vel = Vec3(0.0, 0.0, 0.0)
+
+    def update(
+        self,
+        ee_pos: Vec3,
+        prev_pos: Vec3,
+        dt: float,
+        tray_bound: bool,
+        tray_dims: Optional[Vec3],
+        contact_phase: bool = False,
+    ) -> None:
+        if dt <= 0:
+            return
+        vx = (ee_pos.x - prev_pos.x) / dt
+        vy = (ee_pos.y - prev_pos.y) / dt
+        vz = (ee_pos.z - prev_pos.z) / dt
+        ax = (vx - self._prev_vel.x) / dt
+        ay = (vy - self._prev_vel.y) / dt
+        az = (vz - self._prev_vel.z) / dt
+        self._prev_vel = Vec3(vx, vy, vz)
+
+        if tray_bound and tray_dims:
+            volume_m3 = tray_dims.x * tray_dims.y * tray_dims.z
+            self.payload_kg = round(volume_m3 * 1200.0, 3)
+        else:
+            self.payload_kg = 0.0
+
+        m = self.payload_kg
+        self.fz = round(-m * self.GRAVITY_MPS2 + m * az, 2)
+        self.fx = round(m * ax, 2)
+        self.fy = round(m * ay, 2)
+
+        if contact_phase:
+            self.fx += round(random.uniform(1.5, 4.0), 2)
+
+        arm_len = 0.15
+        self.tx = round(self.fz * arm_len * 0.3, 3)
+        self.ty = round(self.fx * arm_len * 0.2, 3)
+        self.tz = round(self.fy * arm_len * 0.1, 3)
+
+    def snapshot(self) -> dict:
+        return {
+            "fx": self.fx, "fy": self.fy, "fz": self.fz,
+            "tx": self.tx, "ty": self.ty, "tz": self.tz,
+            "payload_kg": self.payload_kg,
+        }
+
+
 @dataclass
 class SimTray:
     tray_id: str
@@ -240,6 +395,8 @@ class WorkcellLayout:
     dirty_observe: Vec3 = field(default_factory=lambda: Vec3(-1.15, 0.55, 1.45))
     return_observe: Vec3 = field(default_factory=lambda: Vec3(0.65, -0.75, 0.95))
     safe_home: Vec3 = field(default_factory=lambda: Vec3(0.40, 0.0, 1.10))
+    dirty_pick_rand_x: float = 0.06
+    dirty_pick_rand_y: float = 0.08
 
 
 @dataclass
@@ -257,9 +414,14 @@ class SidePickConfig:
     tray_thickness_m: float = 0.05
     washer_cycle_s: float = 8.0
     post_place_clean_hold_s: float = 3.0
-    # Vision mock noise (simulates USB camera + tag solve error)
-    vision_noise_xy_m: float = 0.015
+    # Vision sensor simulation
+    vision_noise_xy_m: float = 0.005
     vision_confidence_threshold: float = 0.90
+    vision_fail_prob: float = 0.05
+    vision_max_retries: int = 3
+    proximity_grip_threshold_m: float = 0.03
+    randomize_tray_size: bool = True
+    randomize_tray_position: bool = True
 
 
 class VisionGuidedSidePickFSM:
@@ -302,6 +464,19 @@ class VisionGuidedSidePickFSM:
         self._last_placed_clean_tray: Optional[SimTray] = None
         self._post_place_clean_hold_until_s = 0.0
         self._last_dt = 0.02
+        self._prev_ee_pos = Vec3(0.0, 0.0, 1.0)
+
+        self.sim_vision = SimVisionSensor(
+            noise_std_m=self.cfg.vision_noise_xy_m,
+            fail_prob=self.cfg.vision_fail_prob,
+        )
+        self.sim_proximity = SimProximitySensor(
+            grip_threshold_m=self.cfg.proximity_grip_threshold_m,
+        )
+        self.sim_force = SimForceSensor()
+        self._detect_retry_count = 0
+        self._last_detection: Optional[DetectionResult] = None
+
         self._dirty_trays = self._make_initial_dirty_trays()
         self._init_ik_solver()
         self._update_joint_solution_from_ee_pose()
@@ -323,6 +498,19 @@ class VisionGuidedSidePickFSM:
         if self._active_tray and self._active_tray.bound_to_tool:
             self._active_tray.sync_with_tool(self._ee_pose)
 
+        target_for_prox = self._current_target
+        self.sim_proximity.update(self._ee_pose.pos, target_for_prox)
+
+        contact_phase = (self._traj and self._traj.current and
+                         "contact" in (self._traj.current.name or ""))
+        self.sim_force.update(
+            self._ee_pose.pos, self._prev_ee_pos, dt,
+            bool(self._active_tray and self._active_tray.bound_to_tool),
+            self._active_tray.dims_m if self._active_tray else None,
+            contact_phase=bool(contact_phase),
+        )
+        self._prev_ee_pos = self._ee_pose.pos.copy()
+
         self._update_washer_tray_sim(dt)
 
         if self.state == SidePickState.DETECT_DIRTY:
@@ -340,6 +528,7 @@ class VisionGuidedSidePickFSM:
 
     def snapshot(self) -> dict:
         roll, pitch, yaw = quat_to_euler_deg(self._ee_pose.quat)
+        det = self._last_detection
         return {
             "state": self.state.value,
             "robot_pose": {
@@ -371,6 +560,22 @@ class VisionGuidedSidePickFSM:
                 },
             },
             "last_error": self.last_error,
+            "detection": {
+                "detected": det.detected if det else False,
+                "confidence": det.confidence if det else 0.0,
+                "bbox": det.bbox if det else None,
+                "noise_std_m": det.noise_std_m if det else 0.0,
+                "latency_ms": det.latency_ms if det else 0.0,
+                "camera_frame_id": self.sim_vision.frame_id,
+                "tray_size_label": det.tray_size_label if det else "",
+                "detect_retries": self._detect_retry_count,
+            },
+            "proximity": {
+                "distance_m": round(self.sim_proximity.distance_m, 4) if self.sim_proximity.distance_m != float("inf") else None,
+                "triggered": self.sim_proximity.triggered,
+                "threshold_m": self.sim_proximity.grip_threshold_m,
+            },
+            "force_sensor": self.sim_force.snapshot(),
         }
 
     def get_joint_angles_rad(self) -> list[float]:
@@ -387,7 +592,12 @@ class VisionGuidedSidePickFSM:
             return
         target = self._detect_top_dirty_tray_side()
         if target is None:
+            self._detect_retry_count += 1
+            if self._detect_retry_count >= self.cfg.vision_max_retries:
+                self._fault("Vision detection failed after max retries")
+                self._detect_retry_count = 0
             return
+        self._detect_retry_count = 0
         self._current_target = target
         self._transition(SidePickState.PICK_DIRTY_SIDE)
 
@@ -488,7 +698,8 @@ class VisionGuidedSidePickFSM:
 
         def on_vacuum_on() -> None:
             self.vacuum.turn_on()
-            if self.vacuum.vacuum_ok:
+            self.sim_proximity.update(self._ee_pose.pos, contact)
+            if self.vacuum.vacuum_ok and self.sim_proximity.triggered:
                 tray.bind_to_tool(self._ee_pose, tray_side_offset)
 
         return [
@@ -644,9 +855,13 @@ class VisionGuidedSidePickFSM:
         self.vision.default_target.x = true_side.x
         self.vision.default_target.y = true_side.y
         self.vision.default_target.z = true_side.z
-        d = self.vision.detect()
-        if d.get("detected") and float(d.get("confidence", 0.0)) >= self.cfg.vision_confidence_threshold:
-            return self._mock_vision_detect(true_side)
+        self.vision.detect()
+
+        size_label = getattr(tray, "_size_label", "medium")
+        result = self.sim_vision.detect(true_side, tray_size_label=size_label)
+        self._last_detection = result
+        if result.detected and result.confidence >= self.cfg.vision_confidence_threshold and result.pose:
+            return result.pose
         return None
 
     def _detect_clean_tray_at_return(self) -> Optional[Vec3]:
@@ -659,9 +874,13 @@ class VisionGuidedSidePickFSM:
         self.vision.default_target.x = true_side.x
         self.vision.default_target.y = true_side.y
         self.vision.default_target.z = true_side.z
-        d = self.vision.detect()
-        if d.get("detected") and float(d.get("confidence", 0.0)) >= self.cfg.vision_confidence_threshold:
-            return self._mock_vision_detect(true_side)
+        self.vision.detect()
+
+        size_label = getattr(tray, "_size_label", "medium")
+        result = self.sim_vision.detect(true_side, tray_size_label=size_label)
+        self._last_detection = result
+        if result.detected and result.confidence >= self.cfg.vision_confidence_threshold and result.pose:
+            return result.pose
         return None
 
     def _update_washer_tray_sim(self, dt: float) -> None:
@@ -845,17 +1064,30 @@ class VisionGuidedSidePickFSM:
         trays: list[SimTray] = []
         base = self.layout.dirty_rack_pick
         for i in range(4):
-            trays.append(
-                SimTray(
-                    tray_id=f"dirty_{i+1}",
-                    dims_m=Vec3(0.40, 0.40, self.cfg.tray_thickness_m),
-                    pose=Pose(
-                        pos=Vec3(base.x, base.y, base.z + i * self.cfg.tray_thickness_m),
-                        quat=self._side_pick_quat,
-                    ),
-                    is_clean=False,
-                )
+            if self.cfg.randomize_tray_position:
+                rand_x = random.uniform(-self.layout.dirty_pick_rand_x, self.layout.dirty_pick_rand_x)
+                rand_y = random.uniform(-self.layout.dirty_pick_rand_y, self.layout.dirty_pick_rand_y)
+            else:
+                rand_x, rand_y = 0.0, 0.0
+
+            if self.cfg.randomize_tray_size:
+                size_label, size_vec = random.choice(TRAY_SIZE_PRESETS)
+                dims = size_vec.copy()
+            else:
+                size_label = "medium"
+                dims = Vec3(0.40, 0.40, self.cfg.tray_thickness_m)
+
+            tray = SimTray(
+                tray_id=f"dirty_{i+1}",
+                dims_m=dims,
+                pose=Pose(
+                    pos=Vec3(base.x + rand_x, base.y + rand_y, base.z + i * dims.z),
+                    quat=self._side_pick_quat,
+                ),
+                is_clean=False,
             )
+            tray._size_label = size_label  # type: ignore[attr-defined]
+            trays.append(tray)
         return trays
 
 

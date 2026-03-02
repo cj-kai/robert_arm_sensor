@@ -18,6 +18,24 @@
         .log-error { color: #ef4444; }
         @keyframes pulse-slow { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
         .animate-pulse-slow { animation: pulse-slow 2s infinite; }
+        .pip-container { position:absolute; right:12px; top:10px; width:256px; height:192px; border:2px solid #334155; border-radius:8px; overflow:hidden; z-index:4; background:#0b0f14; }
+        .pip-label { position:absolute; top:4px; left:6px; font:bold 10px/1 system-ui; color:#94a3b8; z-index:5; pointer-events:none; text-shadow:0 1px 3px rgba(0,0,0,.7); }
+        .pip-bbox { position:absolute; border:2px solid #22d3ee; z-index:5; pointer-events:none; border-radius:2px; }
+        .pip-bbox-label { position:absolute; top:-16px; left:0; font:bold 9px/1 system-ui; color:#22d3ee; white-space:nowrap; text-shadow:0 1px 2px rgba(0,0,0,.8); }
+        .pip-no-detect { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; font:bold 14px/1 system-ui; color:#ef4444; z-index:5; pointer-events:none; text-shadow:0 1px 4px rgba(0,0,0,.8); }
+        .param-panel { position:absolute; left:12px; bottom:10px; width:220px; z-index:4; background:rgba(15,23,42,0.92); border:1px solid #334155; border-radius:8px; padding:8px 10px; font-size:11px; max-height:340px; overflow-y:auto; }
+        .param-panel h4 { font-size:10px; color:#64748b; text-transform:uppercase; letter-spacing:.5px; margin:6px 0 3px; }
+        .param-panel h4:first-child { margin-top:0; }
+        .param-row { display:flex; align-items:center; justify-content:space-between; margin:3px 0; color:#94a3b8; }
+        .param-row input[type=range] { width:90px; height:4px; accent-color:#3b82f6; }
+        .param-row .param-val { font:10px/1 monospace; color:#cbd5e1; min-width:36px; text-align:right; }
+        .playback-bar { display:flex; gap:4px; align-items:center; margin-top:6px; padding-top:6px; border-top:1px solid #1e293b; }
+        .playback-bar button { background:#1e293b; border:1px solid #334155; color:#cbd5e1; padding:3px 8px; border-radius:4px; font-size:11px; cursor:pointer; }
+        .playback-bar button:hover { background:#334155; }
+        .playback-bar button.active { background:#3b82f6; border-color:#60a5fa; color:white; }
+        .sensor-panel { position:absolute; left:12px; bottom:360px; width:220px; z-index:4; background:rgba(15,23,42,0.92); border:1px solid #334155; border-radius:8px; padding:8px 10px; font-size:11px; }
+        .sensor-row { display:flex; justify-content:space-between; color:#94a3b8; margin:2px 0; }
+        .sensor-row .sv { font:10px/1 monospace; color:#cbd5e1; }
     </style>
 </head>
 <body class="min-h-screen text-slate-300">
@@ -249,7 +267,11 @@ let latest = {
     safety: {web_motion_allowed: false, manual_jog_enabled: false},
     payload: {kind: 'square_tray_10_75', label: 'Square Tray 10.75', dims_m: {x_m: 0.2731, y_m: 0.2731, z_m: 0.0318}, tag_size_m: 0.05, is_clean: false},
     washer: {model: 'MIMASA DA-80', mode: 'simulated', busy: false, done: false, cycle_time_s: 12, remaining_s: 0},
-    tray_body: {visible: false, tray_id: '', bound_to_tool: false, gravity_enabled: true, is_clean: false, dims_m: {x_m: 0.4, y_m: 0.4, z_m: 0.05}, pose: {x_m: -1.5, y_m: 1.2, z_m: 0.8}}
+    tray_body: {visible: false, tray_id: '', bound_to_tool: false, gravity_enabled: true, is_clean: false, dims_m: {x_m: 0.4, y_m: 0.4, z_m: 0.05}, pose: {x_m: -1.5, y_m: 1.2, z_m: 0.8}},
+    proximity: {distance_m: null, triggered: false, threshold_m: 0.03},
+    force_sensor: {fx: 0, fy: 0, fz: 0, tx: 0, ty: 0, tz: 0, payload_kg: 0},
+    sim_speed: 1.0,
+    sim_paused: false
 };
 
 // ============ DOM Elements ============
@@ -951,6 +973,136 @@ async function buildThreeApp(THREE, OrbitControls, URDFLoaderClass = null) {
         jointGauges.push({ fill, val, limit: JOINT_LIMITS_DEG[i] });
     }
 
+    // ---- Eye-in-hand PiP camera ----
+    const pipCam = new THREE.PerspectiveCamera(65, 256 / 192, 0.01, 20);
+    ee.add(pipCam);
+    pipCam.position.set(-0.02, 0.03, 0.03);
+    pipCam.lookAt(new THREE.Vector3(0.3, 0, 0));
+
+    const pipDiv = document.createElement('div');
+    pipDiv.className = 'pip-container';
+    container.appendChild(pipDiv);
+    const pipLabel = document.createElement('div');
+    pipLabel.className = 'pip-label';
+    pipLabel.textContent = 'EYE-IN-HAND CAM';
+    pipDiv.appendChild(pipLabel);
+    const pipCanvas = document.createElement('canvas');
+    pipCanvas.width = 256; pipCanvas.height = 192;
+    pipCanvas.style.cssText = 'width:100%;height:100%;display:block;';
+    pipDiv.appendChild(pipCanvas);
+    const pipRenderer = new THREE.WebGLRenderer({ canvas: pipCanvas, antialias: false });
+    pipRenderer.setSize(256, 192);
+    pipRenderer.setPixelRatio(1);
+
+    const pipBbox = document.createElement('div');
+    pipBbox.className = 'pip-bbox';
+    pipBbox.style.display = 'none';
+    pipDiv.appendChild(pipBbox);
+    const pipBboxLabel = document.createElement('div');
+    pipBboxLabel.className = 'pip-bbox-label';
+    pipBbox.appendChild(pipBboxLabel);
+    const pipNoDetect = document.createElement('div');
+    pipNoDetect.className = 'pip-no-detect';
+    pipNoDetect.style.display = 'none';
+    pipNoDetect.textContent = 'NO DETECTION';
+    pipDiv.appendChild(pipNoDetect);
+
+    // ---- Proximity sensor visualization ----
+    const proxLineMat = new THREE.LineDashedMaterial({ color: 0xef4444, dashSize: 0.03, gapSize: 0.02, transparent: true, opacity: 0.8 });
+    const proxLineGeo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]);
+    const proxLine = new THREE.Line(proxLineGeo, proxLineMat);
+    proxLine.computeLineDistances();
+    proxLine.visible = false;
+    scene.add(proxLine);
+
+    const proxLabelDiv = document.createElement('div');
+    proxLabelDiv.style.cssText = 'position:absolute;z-index:3;pointer-events:none;font:bold 11px/1 monospace;color:#ef4444;text-shadow:0 1px 3px rgba(0,0,0,.8);display:none;';
+    container.appendChild(proxLabelDiv);
+
+    // ---- Sensor data panels (force/proximity HUD) ----
+    const sensorPanel = document.createElement('div');
+    sensorPanel.className = 'sensor-panel';
+    sensorPanel.innerHTML = `
+      <div style="font:bold 10px/1 system-ui;color:#64748b;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;">Sensors</div>
+      <div style="font:bold 9px/1 system-ui;color:#475569;margin-top:4px;">PROXIMITY</div>
+      <div class="sensor-row"><span>Distance</span><span class="sv" id="sproxDist">--</span></div>
+      <div class="sensor-row"><span>Triggered</span><span class="sv" id="sproxTrig">NO</span></div>
+      <div style="font:bold 9px/1 system-ui;color:#475569;margin-top:4px;">FORCE / TORQUE</div>
+      <div class="sensor-row"><span>Fx</span><span class="sv" id="sfx">0.00</span></div>
+      <div class="sensor-row"><span>Fy</span><span class="sv" id="sfy">0.00</span></div>
+      <div class="sensor-row"><span>Fz</span><span class="sv" id="sfz">0.00</span></div>
+      <div class="sensor-row"><span>Payload</span><span class="sv" id="spayload">0.000 kg</span></div>
+      <div style="font:bold 9px/1 system-ui;color:#475569;margin-top:4px;">VISION</div>
+      <div class="sensor-row"><span>Detection</span><span class="sv" id="sdetect">--</span></div>
+      <div class="sensor-row"><span>Confidence</span><span class="sv" id="sconf">0.000</span></div>
+      <div class="sensor-row"><span>Noise</span><span class="sv" id="snoise">0.000m</span></div>
+      <div class="sensor-row"><span>Latency</span><span class="sv" id="slatency">0ms</span></div>
+      <div class="sensor-row"><span>Tray Size</span><span class="sv" id="straysize">--</span></div>
+      <div class="sensor-row"><span>Frame</span><span class="sv" id="sframe">0</span></div>
+    `;
+    container.appendChild(sensorPanel);
+
+    // ---- Parameter control panel ----
+    const paramPanel = document.createElement('div');
+    paramPanel.className = 'param-panel';
+    paramPanel.innerHTML = `
+      <div style="font:bold 11px/1 system-ui;color:#cbd5e1;margin-bottom:4px;">Simulation Parameters</div>
+      <h4>Motion</h4>
+      <div class="param-row"><span>Joint Speed</span><input type="range" id="pJointSpeed" min="0.5" max="4.0" step="0.1" value="2.0"><span class="param-val" id="pvJointSpeed">2.0</span></div>
+      <div class="param-row"><span>Standoff</span><input type="range" id="pStandoff" min="0.10" max="0.30" step="0.01" value="0.20"><span class="param-val" id="pvStandoff">0.20</span></div>
+      <h4>Vision Sensor</h4>
+      <div class="param-row"><span>Noise (m)</span><input type="range" id="pNoise" min="0" max="0.02" step="0.001" value="0.005"><span class="param-val" id="pvNoise">0.005</span></div>
+      <div class="param-row"><span>Fail %</span><input type="range" id="pFailProb" min="0" max="0.20" step="0.01" value="0.05"><span class="param-val" id="pvFailProb">5%</span></div>
+      <h4>Tray</h4>
+      <div class="param-row"><span>Random Size</span><label style="cursor:pointer"><input type="checkbox" id="pRandSize" checked> On</label></div>
+      <div class="param-row"><span>Random Pos</span><label style="cursor:pointer"><input type="checkbox" id="pRandPos" checked> On</label></div>
+      <div class="playback-bar">
+        <button id="pbPause" title="Pause/Resume">⏸</button>
+        <button class="active" data-speed="0.25">0.25x</button>
+        <button data-speed="0.5">0.5x</button>
+        <button data-speed="1" class="active">1x</button>
+        <button data-speed="2">2x</button>
+      </div>
+    `;
+    container.appendChild(paramPanel);
+
+    const sendParam = (params) => {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'param_update', params }));
+        }
+    };
+    const bindSlider = (id, valId, key, fmt) => {
+        const sl = document.getElementById(id);
+        const vl = document.getElementById(valId);
+        if (!sl || !vl) return;
+        sl.addEventListener('input', () => { vl.textContent = fmt(sl.value); });
+        sl.addEventListener('change', () => { sendParam({ [key]: parseFloat(sl.value) }); });
+    };
+    bindSlider('pJointSpeed', 'pvJointSpeed', 'max_joint_speed', v => parseFloat(v).toFixed(1));
+    bindSlider('pStandoff', 'pvStandoff', 'approach_standoff', v => parseFloat(v).toFixed(2));
+    bindSlider('pNoise', 'pvNoise', 'vision_noise', v => parseFloat(v).toFixed(3));
+    bindSlider('pFailProb', 'pvFailProb', 'vision_fail_prob', v => Math.round(parseFloat(v) * 100) + '%');
+    const pRandSize = document.getElementById('pRandSize');
+    const pRandPos = document.getElementById('pRandPos');
+    if (pRandSize) pRandSize.addEventListener('change', () => sendParam({ randomize_tray_size: pRandSize.checked }));
+    if (pRandPos) pRandPos.addEventListener('change', () => sendParam({ randomize_tray_position: pRandPos.checked }));
+
+    const pbPause = document.getElementById('pbPause');
+    let simPausedLocal = false;
+    if (pbPause) pbPause.addEventListener('click', () => {
+        simPausedLocal = !simPausedLocal;
+        pbPause.textContent = simPausedLocal ? '▶' : '⏸';
+        pbPause.classList.toggle('active', simPausedLocal);
+        sendParam({ sim_paused: simPausedLocal });
+    });
+    paramPanel.querySelectorAll('[data-speed]').forEach(btn => {
+        btn.addEventListener('click', () => {
+            paramPanel.querySelectorAll('[data-speed]').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            sendParam({ sim_speed: parseFloat(btn.dataset.speed) });
+        });
+    });
+
     const mapPose = (pose) => ({
         x: asNumber(pose.x_m, 0),
         y: asNumber(pose.z_m, 0.3),
@@ -1217,6 +1369,89 @@ async function buildThreeApp(THREE, OrbitControls, URDFLoaderClass = null) {
                     }
                 }
 
+                // ---- Sensor panel updates ----
+                const prox = data.proximity || {};
+                const frc = data.force_sensor || {};
+                const vis2 = data.vision || {};
+                const sproxDist = document.getElementById('sproxDist');
+                const sproxTrig = document.getElementById('sproxTrig');
+                if (sproxDist) sproxDist.textContent = prox.distance_m != null ? prox.distance_m.toFixed(3) + 'm' : '--';
+                if (sproxTrig) {
+                    sproxTrig.textContent = prox.triggered ? 'YES' : 'NO';
+                    sproxTrig.style.color = prox.triggered ? '#22c55e' : '#ef4444';
+                }
+                const sfx = document.getElementById('sfx');
+                const sfy = document.getElementById('sfy');
+                const sfz = document.getElementById('sfz');
+                const spayload = document.getElementById('spayload');
+                if (sfx) sfx.textContent = frc.fx?.toFixed(2) || '0.00';
+                if (sfy) sfy.textContent = frc.fy?.toFixed(2) || '0.00';
+                if (sfz) sfz.textContent = frc.fz?.toFixed(2) || '0.00';
+                if (spayload) spayload.textContent = (frc.payload_kg?.toFixed(3) || '0.000') + ' kg';
+                const sdetect = document.getElementById('sdetect');
+                const sconf = document.getElementById('sconf');
+                const snoise = document.getElementById('snoise');
+                const slatency = document.getElementById('slatency');
+                const straysize = document.getElementById('straysize');
+                const sframe = document.getElementById('sframe');
+                if (sdetect) {
+                    sdetect.textContent = vis2.detected ? 'YES' : 'NO';
+                    sdetect.style.color = vis2.detected ? '#22c55e' : '#ef4444';
+                }
+                if (sconf) sconf.textContent = asNumber(vis2.confidence).toFixed(3);
+                if (snoise) snoise.textContent = asNumber(vis2.detection_noise_m).toFixed(3) + 'm';
+                if (slatency) slatency.textContent = Math.round(asNumber(vis2.detection_latency_ms)) + 'ms';
+                if (straysize) straysize.textContent = vis2.tray_size_label || '--';
+                if (sframe) sframe.textContent = vis2.camera_frame_id || '0';
+
+                // ---- Proximity line visualization ----
+                const proxDist = prox.distance_m;
+                if (proxDist != null && proxDist < 2.0 && !trayAttached) {
+                    const tp2 = data.target_pose || {};
+                    const targetWorld = new THREE.Vector3(
+                        asNumber(tp2.x_m, 0), asNumber(tp2.z_m, 0),
+                        worldZFromPlantY(tp2.y_m, 0)
+                    );
+                    proxLine.geometry.setFromPoints([eeWorld.clone(), targetWorld]);
+                    proxLine.computeLineDistances();
+                    const proxColor = prox.triggered ? 0x22c55e : (proxDist < 0.10 ? 0xf59e0b : 0xef4444);
+                    proxLine.material.color.setHex(proxColor);
+                    proxLine.visible = true;
+                    const mid = eeWorld.clone().lerp(targetWorld, 0.5);
+                    const screenPos = mid.clone().project(camera);
+                    const px = (screenPos.x * 0.5 + 0.5) * renderer.domElement.clientWidth;
+                    const py = (-screenPos.y * 0.5 + 0.5) * renderer.domElement.clientHeight;
+                    proxLabelDiv.style.left = px + 'px';
+                    proxLabelDiv.style.top = py + 'px';
+                    proxLabelDiv.style.display = 'block';
+                    proxLabelDiv.style.color = prox.triggered ? '#22c55e' : '#ef4444';
+                    proxLabelDiv.textContent = proxDist.toFixed(3) + 'm';
+                } else {
+                    proxLine.visible = false;
+                    proxLabelDiv.style.display = 'none';
+                }
+
+                // ---- PiP detection overlay ----
+                const bbox = vis2.detection_bbox;
+                const isDetectState = stateCode === 'DETECTING_TARGET';
+                if (isDetectState && bbox && vis2.detected) {
+                    const sx = 256 / 640, sy = 192 / 480;
+                    pipBbox.style.display = 'block';
+                    pipBbox.style.left = Math.round(bbox.x * sx) + 'px';
+                    pipBbox.style.top = Math.round(bbox.y * sy) + 'px';
+                    pipBbox.style.width = Math.round(bbox.w * sx) + 'px';
+                    pipBbox.style.height = Math.round(bbox.h * sy) + 'px';
+                    pipBbox.style.borderColor = '#22d3ee';
+                    pipBboxLabel.textContent = `${(vis2.confidence * 100).toFixed(0)}% ${vis2.tray_size_label || ''}`;
+                    pipNoDetect.style.display = 'none';
+                } else if (isDetectState && !vis2.detected && vis2.detect_retries > 0) {
+                    pipBbox.style.display = 'none';
+                    pipNoDetect.style.display = 'flex';
+                } else {
+                    pipBbox.style.display = 'none';
+                    pipNoDetect.style.display = 'none';
+                }
+
                 // Trajectory preview
                 const trajPts = data.trajectory_preview;
                 if (Array.isArray(trajPts) && trajPts.length >= 2) {
@@ -1246,6 +1481,7 @@ async function buildThreeApp(THREE, OrbitControls, URDFLoaderClass = null) {
                     if (conveyorLower.material.map) conveyorLower.material.map.offset.x = -beltAnimOffset;
                 }
                 renderer.render(scene, camera);
+                try { pipRenderer.render(scene, pipCam); } catch (_) {}
             } catch (err) {
                 disableOnRuntimeError(err);
             }
@@ -1494,7 +1730,9 @@ function connectWebSocket() {
                         ...(data.tray_body || {}),
                         dims_m: { ...((latest.tray_body && latest.tray_body.dims_m) || {}), ...((data.tray_body && data.tray_body.dims_m) || {}) },
                         pose: { ...((latest.tray_body && latest.tray_body.pose) || {}), ...((data.tray_body && data.tray_body.pose) || {}) }
-                    }
+                    },
+                    proximity: { ...(latest.proximity || {}), ...(data.proximity || {}) },
+                    force_sensor: { ...(latest.force_sensor || {}), ...(data.force_sensor || {}) },
                 };
             } catch (e) {
                 console.error('Failed to parse message:', e);

@@ -68,7 +68,21 @@ async def websocket_endpoint(websocket: WebSocket):
     await ws_manager.connect(websocket)
     try:
         while True:
-            _ = await websocket.receive_text()
+            raw = await websocket.receive_text()
+            if not raw or raw == "ping":
+                continue
+            try:
+                import json
+                msg = json.loads(raw)
+                msg_type = msg.get("type", "")
+                if msg_type == "param_update":
+                    fsm.update_params(msg.get("params", {}))
+                elif msg_type == "sim_speed":
+                    fsm.set_sim_speed(float(msg.get("speed", 1.0)))
+                elif msg_type == "sim_pause":
+                    fsm.set_sim_paused(bool(msg.get("paused", False)))
+            except Exception:
+                pass
     except WebSocketDisconnect:
         await ws_manager.disconnect(websocket)
     except Exception as exc:

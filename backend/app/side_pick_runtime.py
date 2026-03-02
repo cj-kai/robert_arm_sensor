@@ -24,6 +24,8 @@ class SidePickExecutionFSM:
 
         self._running = False
         self._paused = False
+        self._sim_speed = 1.0
+        self._sim_paused = False
         self._cycle_name = "clean_to_conveyor_to_dirty"
         self._cycle_id = ""
         self._task_phase_override: Optional[str] = "WAITING"
@@ -47,6 +49,10 @@ class SidePickExecutionFSM:
 
     def update(self, dt: float) -> None:
         dt = max(0.0, min(0.1, float(dt)))
+        if self._sim_paused:
+            dt = 0.0
+        else:
+            dt *= max(0.1, min(4.0, self._sim_speed))
         if self._running and not self._paused:
             self.core.step(dt)
         self._sync_state_from_core()
@@ -140,6 +146,41 @@ class SidePickExecutionFSM:
         self.state.clear_logs()
         self.state.add_log(LogLevel.INFO, "LOG_CLEARED", "Log buffer cleared")
 
+    # ---- playback / param control ----
+
+    def set_sim_speed(self, speed: float) -> None:
+        self._sim_speed = max(0.1, min(4.0, float(speed)))
+        self.state.add_log(LogLevel.INFO, "SIM_SPEED", f"Speed set to {self._sim_speed:.1f}x")
+
+    def set_sim_paused(self, paused: bool) -> None:
+        self._sim_paused = bool(paused)
+        action = "paused" if self._sim_paused else "resumed"
+        self.state.add_log(LogLevel.INFO, "SIM_PLAYBACK", f"Simulation {action}")
+
+    def update_params(self, params: dict) -> None:
+        cfg = self.core.cfg
+        if "max_joint_speed" in params:
+            self.core.MAX_JOINT_SPEED_RAD_S = max(0.5, min(4.0, float(params["max_joint_speed"])))
+        if "approach_standoff" in params:
+            cfg.approach_standoff_m = max(0.10, min(0.30, float(params["approach_standoff"])))
+        if "vision_noise" in params:
+            noise = max(0.0, min(0.02, float(params["vision_noise"])))
+            cfg.vision_noise_xy_m = noise
+            self.core.sim_vision.noise_std_m = noise
+        if "vision_fail_prob" in params:
+            prob = max(0.0, min(0.20, float(params["vision_fail_prob"])))
+            cfg.vision_fail_prob = prob
+            self.core.sim_vision.fail_prob = prob
+        if "randomize_tray_size" in params:
+            cfg.randomize_tray_size = bool(params["randomize_tray_size"])
+        if "randomize_tray_position" in params:
+            cfg.randomize_tray_position = bool(params["randomize_tray_position"])
+        if "sim_speed" in params:
+            self.set_sim_speed(float(params["sim_speed"]))
+        if "sim_paused" in params:
+            self.set_sim_paused(bool(params["sim_paused"]))
+        self.state.add_log(LogLevel.INFO, "PARAM_UPDATE", f"Parameters updated: {list(params.keys())}")
+
     # ---- health / calibration / camera API ----
 
     def get_health(self) -> dict:
@@ -183,13 +224,20 @@ class SidePickExecutionFSM:
             self.state.joint_angles_rad = self.core.robot.get_joint_angles_rad()
 
         vis = self.core.vision.detect()
+        det = snap.get("detection", {})
         self.state.vision = {
-            "detected": bool(vis.get("detected", False)),
-            "confidence": round(float(vis.get("confidence", 0.0)), 2),
+            "detected": bool(det.get("detected", vis.get("detected", False))),
+            "confidence": round(float(det.get("confidence", vis.get("confidence", 0.0))), 3),
             "tag_id": vis.get("tag_id"),
             "source": "wrist_usb",
             "camera_ok": self._vision_adapter.camera_ok(),
-            "pose_valid": bool(vis.get("pose_valid", False)),
+            "pose_valid": bool(det.get("detected", vis.get("pose_valid", False))),
+            "detection_bbox": det.get("bbox"),
+            "detection_noise_m": det.get("noise_std_m", 0.0),
+            "detection_latency_ms": det.get("latency_ms", 0.0),
+            "camera_frame_id": det.get("camera_frame_id", 0),
+            "tray_size_label": det.get("tray_size_label", ""),
+            "detect_retries": det.get("detect_retries", 0),
         }
 
         target = self.core._current_target
@@ -247,6 +295,11 @@ class SidePickExecutionFSM:
             self.state.trajectory_preview = pts
         else:
             self.state.trajectory_preview = []
+
+        self.state.proximity = snap.get("proximity", {"distance_m": None, "triggered": False, "threshold_m": 0.03})
+        self.state.force_sensor = snap.get("force_sensor", {"fx": 0, "fy": 0, "fz": 0, "tx": 0, "ty": 0, "tz": 0, "payload_kg": 0})
+        self.state.sim_speed = self._sim_speed
+        self.state.sim_paused = self._sim_paused
 
         if self.core.state == SidePickState.FAULT:
             self.state.fault = {"active": True, "code": "SIDE_PICK_FAULT", "msg": self.core.last_error or "Side-pick FSM fault"}

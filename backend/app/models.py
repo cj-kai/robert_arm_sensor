@@ -82,6 +82,28 @@ def _default_vision() -> dict:
         "source": "wrist_usb",
         "camera_ok": False,
         "pose_valid": False,
+        "detection_bbox": None,
+        "detection_noise_m": 0.0,
+        "detection_latency_ms": 0.0,
+        "camera_frame_id": 0,
+        "tray_size_label": "",
+        "detect_retries": 0,
+    }
+
+
+def _default_proximity() -> dict:
+    return {
+        "distance_m": None,
+        "triggered": False,
+        "threshold_m": 0.03,
+    }
+
+
+def _default_force_sensor() -> dict:
+    return {
+        "fx": 0.0, "fy": 0.0, "fz": 0.0,
+        "tx": 0.0, "ty": 0.0, "tz": 0.0,
+        "payload_kg": 0.0,
     }
 
 
@@ -214,6 +236,10 @@ class SystemState:
     washer: dict = field(default_factory=_default_washer)
     tray_body: dict = field(default_factory=_default_tray_body)
     trajectory_preview: list = field(default_factory=list)
+    proximity: dict = field(default_factory=_default_proximity)
+    force_sensor: dict = field(default_factory=_default_force_sensor)
+    sim_speed: float = 1.0
+    sim_paused: bool = False
 
     def add_log(self, level: LogLevel, code: str, msg: str) -> None:
         entry = LogEntry(ts=time.time(), level=level, code=code, msg=msg)
@@ -254,6 +280,10 @@ class SystemState:
             "washer": self.washer,
             "tray_body": self.tray_body,
             "trajectory_preview": self.trajectory_preview,
+            "proximity": self.proximity,
+            "force_sensor": self.force_sensor,
+            "sim_speed": self.sim_speed,
+            "sim_paused": self.sim_paused,
         }
 
 
